@@ -1,4 +1,4 @@
-chess.davideb.ch {
+:80 {
     log {
         output stdout
         format json
@@ -7,7 +7,6 @@ chess.davideb.ch {
     encode gzip
 
     # Proxy socket.io requests to the backend server
-    # Socket.io needs WebSocket support which Caddy handles automatically
     handle /socket.io/* {
         reverse_proxy server:3001
     }
