@@ -29,7 +29,13 @@ function broadcastLiveGames() {
     const liveGames = [];
     rooms.forEach((roomData, code) => {
         if (roomData.full) {
-            liveGames.push({ code, moves: roomData.history.length });
+            const whiteHandle = roomData.profiles?.white?.name || 'White';
+            const blackHandle = roomData.profiles?.black?.name || 'Black';
+            liveGames.push({
+                code,
+                moves: roomData.history?.length || 0,
+                players: `${whiteHandle} vs ${blackHandle}`
+            });
         }
     });
     io.emit('live_games_list', liveGames);
@@ -50,7 +56,7 @@ function generateRoomCode() {
 io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
 
-    socket.on('create_game', () => {
+    socket.on('create_game', (data) => {
         let code = generateRoomCode();
         while (rooms.has(code)) {
             code = generateRoomCode();
@@ -59,7 +65,9 @@ io.on('connection', (socket) => {
         // Store room with the creator as white
         rooms.set(code, {
             players: { [socket.id]: 'white' },
-            full: false
+            profiles: { white: data?.profile || { name: 'White' } },
+            full: false,
+            history: []
         });
 
         socket.join(code);
@@ -67,7 +75,7 @@ io.on('connection', (socket) => {
         console.log(`Room ${code} created by ${socket.id} (white)`);
     });
 
-    socket.on('create_cpu_game', () => {
+    socket.on('create_cpu_game', (data) => {
         let code = generateRoomCode();
         while (rooms.has(code)) {
             code = generateRoomCode();
@@ -75,6 +83,10 @@ io.on('connection', (socket) => {
 
         rooms.set(code, {
             players: { [socket.id]: 'white', 'cpu': 'black' },
+            profiles: {
+                white: data?.profile || { name: 'White' },
+                black: { name: 'Stockfish' }
+            },
             full: true, // Show in live games immediately
             history: [],
             isCPU: true
@@ -86,8 +98,8 @@ io.on('connection', (socket) => {
         console.log(`User ${socket.id} started CPU game (Room ${code})`);
     });
 
-    socket.on('join_game', (code) => {
-        code = code.toUpperCase();
+    socket.on('join_game', (data) => {
+        const code = (typeof data === 'string' ? data : data.code).toUpperCase();
         const room = rooms.get(code);
 
         if (!room) {
@@ -102,6 +114,8 @@ io.on('connection', (socket) => {
 
         // Assign black to the second player
         room.players[socket.id] = 'black';
+        if (!room.profiles) room.profiles = {};
+        room.profiles.black = (data && data.profile) || { name: 'Black' };
         room.full = true;
         rooms.set(code, room);
 
@@ -114,7 +128,7 @@ io.on('connection', (socket) => {
         io.to(code).emit('game_start', { message: 'Opponent joined. White to move.' });
     });
 
-    socket.on('find_game', () => {
+    socket.on('find_game', (data) => {
         // If there is no one waiting, or if the current socket is the one waiting (prevent double-click bug)
         if (!waitingPlayer || waitingPlayer.id === socket.id) {
             let code = generateRoomCode();
@@ -124,6 +138,7 @@ io.on('connection', (socket) => {
 
             rooms.set(code, {
                 players: { [socket.id]: 'white' },
+                profiles: { white: data?.profile || { name: 'White' } },
                 full: false,
                 history: [] // Start tracking move history for the DB
             });
@@ -141,6 +156,8 @@ io.on('connection', (socket) => {
 
             if (room) {
                 room.players[socket.id] = 'black';
+                if (!room.profiles) room.profiles = {};
+                room.profiles.black = data?.profile || { name: 'Black' };
                 room.full = true;
                 rooms.set(code, room);
 

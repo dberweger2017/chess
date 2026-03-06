@@ -906,7 +906,10 @@ function App() {
               {liveGames.length === 0 ? <p className="empty-msg">No active games right now</p> :
                 liveGames.map(game => (
                   <div key={game.code} className="list-item" onClick={() => window.open(`/?spectate=${game.code}`, '_blank')}>
-                    <span>Room {game.code}</span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <span style={{ fontSize: '14px', fontWeight: 'bold' }}>{game.players}</span>
+                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Room {game.code}</span>
+                    </div>
                     <span className="badge">{game.moves} moves</span>
                   </div>
                 ))
