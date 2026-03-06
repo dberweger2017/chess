@@ -1,0 +1,21 @@
+chess.davideb.ch {
+    log {
+        output stdout
+        format json
+    }
+
+    encode gzip
+
+    # Proxy socket.io requests to the backend server
+    # Socket.io needs WebSocket support which Caddy handles automatically
+    handle /socket.io/* {
+        reverse_proxy server:3001
+    }
+
+    # Serve built React assets
+    handle {
+        root * /srv
+        try_files {path} {path}/ /index.html
+        file_server
+    }
+}

@@ -1,0 +1,28 @@
+services:
+  server:
+    build: ./server
+    restart: always
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./server/games.db:/app/games.db
+
+  chess-web: # Renamed for unique identification on proxy-nw
+    build: ./web
+    restart: always
+    depends_on:
+      - server
+    networks:
+      - default
+      - proxy-nw
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+
+networks:
+  proxy-nw:
+    external: true
+
+volumes:
+  caddy_data:
+  caddy_config:
