@@ -65,6 +65,7 @@ function App() {
   const [liveGames, setLiveGames] = useState([]);
   const [pastGames, setPastGames] = useState([]);
   const [pendingAnalysisId, setPendingAnalysisId] = useState(null);
+  const [waitingCount, setWaitingCount] = useState(0);
 
   useEffect(() => {
     socket.on('game_created', ({ code, color }) => {
@@ -107,6 +108,7 @@ function App() {
 
     socket.on('live_games_list', (games) => setLiveGames(games));
     socket.on('past_games_list', (games) => setPastGames(games));
+    socket.on('waiting_count', (count) => setWaitingCount(count));
 
     socket.on('opponent_move', ({ startPos, endPos }) => {
       setBoard(prevBoard => {
@@ -168,6 +170,7 @@ function App() {
       socket.off('opponent_move');
       socket.off('opponent_disconnected');
       socket.off('game_saved');
+      socket.off('waiting_count');
     };
   }, []);
 
@@ -175,8 +178,58 @@ function App() {
     if (view === 'LOBBY') {
       socket.emit('get_live_games');
       socket.emit('get_past_games');
+      socket.emit('get_waiting_count');
     }
   }, [view]);
+
+  // Keyboard History Navigation
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.target.tagName === 'INPUT') return;
+      if (view === 'LOBBY' || view === 'WAITING' || view === 'SEARCHING') return;
+
+      if (e.key === 'ArrowLeft') {
+        setHistoryIndex(prev => {
+          let newIdx = prev;
+          if (prev === -1) {
+            if (board.history.length > 1) newIdx = board.history.length - 2;
+          } else if (prev > 0) {
+            newIdx = prev - 1;
+          }
+
+          if (newIdx !== prev) {
+            setSelectedPos(null);
+            setLegalMoves([]);
+            setIsAnalyzing(false);
+            setAnalysisLines([]);
+          }
+          return newIdx;
+        });
+      } else if (e.key === 'ArrowRight') {
+        setHistoryIndex(prev => {
+          let newIdx = prev;
+          if (prev !== -1) {
+            if (prev < board.history.length - 2) {
+              newIdx = prev + 1;
+            } else {
+              newIdx = -1;
+            }
+          }
+
+          if (newIdx !== prev) {
+            setSelectedPos(null);
+            setLegalMoves([]);
+            setIsAnalyzing(false);
+            setAnalysisLines([]);
+          }
+          return newIdx;
+        });
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [board.history.length, view]);
 
   // Auto Analysis URL Trigger
   useEffect(() => {
@@ -577,6 +630,9 @@ function App() {
             <span className="card-icon">⚡</span>
             <h2>Quick Match</h2>
             <p>Find a random opponent instantly</p>
+            <div style={{ marginBottom: '10px', fontSize: '13px', color: 'var(--text-muted)' }}>
+              {waitingCount === 1 ? '1 person looking for a match' : `${waitingCount} people waiting`}
+            </div>
             <button className="btn-green" onClick={handleFindGame}>Find Match</button>
           </div>
 

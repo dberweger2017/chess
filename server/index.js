@@ -21,6 +21,10 @@ const rooms = new Map();
 // Matchmaking waiting queue (stores socket.id)
 let waitingPlayer = null;
 
+function broadcastWaitingCount() {
+    io.emit('waiting_count', waitingPlayer ? 1 : 0);
+}
+
 function generateRoomCode() {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     let code = '';
@@ -92,6 +96,7 @@ io.on('connection', (socket) => {
             });
 
             waitingPlayer = { id: socket.id, code: code };
+            broadcastWaitingCount();
             socket.join(code);
             socket.emit('game_created', { code, color: 'white' });
             socket.emit('waiting_for_match'); // Custom event for the new UI state
@@ -115,6 +120,7 @@ io.on('connection', (socket) => {
             }
             // Reset waiting queue
             waitingPlayer = null;
+            broadcastWaitingCount();
         }
     });
 
@@ -123,6 +129,7 @@ io.on('connection', (socket) => {
             rooms.delete(waitingPlayer.code);
             socket.leave(waitingPlayer.code);
             waitingPlayer = null;
+            broadcastWaitingCount();
             console.log(`User ${socket.id} cancelled matchmaking.`);
         }
     });
@@ -146,6 +153,10 @@ io.on('connection', (socket) => {
             }
         });
         socket.emit('live_games_list', liveGames);
+    });
+
+    socket.on('get_waiting_count', () => {
+        socket.emit('waiting_count', waitingPlayer ? 1 : 0);
     });
 
     socket.on('spectate_game', (code) => {
@@ -182,6 +193,7 @@ io.on('connection', (socket) => {
         if (waitingPlayer && waitingPlayer.id === socket.id) {
             rooms.delete(waitingPlayer.code);
             waitingPlayer = null;
+            broadcastWaitingCount();
         }
 
         // Notify rooms the user was in and close them down
