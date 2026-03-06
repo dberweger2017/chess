@@ -317,6 +317,80 @@ input[type="range"],
   color: rgba(255, 255, 255, 0.7);
 }
 
+/* Analysis Panel */
+.analysis-panel {
+  margin-top: 12px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.analysis-panel h4 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.analysis-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  transition: background 0.15s;
+}
+
+.analysis-line:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.analysis-score {
+  min-width: 42px;
+  text-align: right;
+  font-weight: 700;
+  color: var(--green);
+}
+
+.analysis-moves {
+  flex: 1;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analysis-depth {
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 10px;
+}
+
+@keyframes blink-dot {
+
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+.loading-dot {
+  animation: blink-dot 1s ease-in-out infinite;
+  color: var(--green);
+}
+
 .join-form {
   display: flex;
   flex-direction: column;

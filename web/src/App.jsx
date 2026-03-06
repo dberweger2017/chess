@@ -40,6 +40,12 @@ function App() {
   const [cpuTime, setCpuTime] = useState(3); // seconds
   const [engineStats, setEngineStats] = useState({}); // { moveIndex: { depth, timeMs } }
 
+  // Analysis mode
+  const [analysisLines, setAnalysisLines] = useState([]);
+  const [analysisCache, setAnalysisCache] = useState({}); // { fen: lines[] }
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const analyzerRef = useRef(null);
+
   // Multiplayer states
   const [view, setView] = useState('LOBBY');
   const [roomCode, setRoomCode] = useState('');
@@ -139,6 +145,13 @@ function App() {
   const handleCreateGame = () => socket.emit('create_game');
   const handleFindGame = () => socket.emit('find_game');
 
+  // Helper to save CPU game to DB
+  const saveCpuGame = (b) => {
+    if (b && b.history && b.history.length > 1) {
+      socket.emit('save_cpu_game', { history: b.history });
+    }
+  };
+
   const handlePlayCPU = () => {
     const newBoard = new Board();
     setBoard(newBoard);
@@ -216,13 +229,17 @@ function App() {
           setLegalMoves([]);
           setHistoryIndex(-1);
 
-          // If vs CPU, ask Stockfish
-          if (isVsCPU && updatedBoard.gameStatus === 'active') {
-            setCpuThinking(true);
-            const fen = board.toFEN();
-            setTimeout(() => {
-              stockfishRef.current?.getBestMove(fen);
-            }, 200);
+          // If vs CPU, ask Stockfish or save if game over
+          if (isVsCPU) {
+            if (updatedBoard.gameStatus === 'active') {
+              setCpuThinking(true);
+              const fen = board.toFEN();
+              setTimeout(() => {
+                stockfishRef.current?.getBestMove(fen);
+              }, 200);
+            } else {
+              saveCpuGame(updatedBoard);
+            }
           }
           return;
         }
@@ -373,12 +390,30 @@ function App() {
             <p>Review completed matches</p>
             <div className="item-list">
               {pastGames.length === 0 ? <p className="empty-msg">No past games yet</p> :
-                pastGames.map(game => (
-                  <div key={game.id} className="list-item">
-                    <span>Room {game.room_code}</span>
-                    <span className="badge">{(new Date(game.ended_at)).toLocaleDateString()}</span>
-                  </div>
-                ))
+                pastGames.map(game => {
+                  const moves = game.moves ? JSON.parse(game.moves) : [];
+                  const moveCount = Math.max(0, moves.length - 1);
+                  return (
+                    <div key={game.id} className="list-item" onClick={() => {
+                      const reviewBoard = new Board();
+                      reviewBoard.history = moves;
+                      if (moves.length > 0) {
+                        reviewBoard.pieces = moves[moves.length - 1].pieces;
+                      }
+                      reviewBoard.gameStatus = 'finished';
+                      setBoard(reviewBoard);
+                      setPlayerColor('white');
+                      setRoomCode(game.room_code);
+                      setView('REVIEW');
+                      setHistoryIndex(-1);
+                      setAnalysisLines([]);
+                      setIsAnalyzing(false);
+                    }}>
+                      <span>{game.room_code} · {moveCount} moves</span>
+                      <span className="badge">{(new Date(game.ended_at)).toLocaleDateString()}</span>
+                    </div>
+                  );
+                })
               }
             </div>
           </div>
@@ -429,10 +464,60 @@ function App() {
     }
     setSelectedPos(null);
     setLegalMoves([]);
+    // Stop current analysis when navigating
+    setIsAnalyzing(false);
+    setAnalysisLines([]);
+  };
+
+  // Analysis: compute FEN for the current position being viewed
+  const getViewedFEN = () => {
+    // Build a temporary board from the history snapshot
+    const snapshot = historyIndex === -1
+      ? board.history[board.history.length - 1]
+      : board.history[historyIndex];
+    if (!snapshot) return null;
+    const tmpBoard = new Board();
+    tmpBoard.pieces = snapshot.pieces;
+    const moveNum = historyIndex === -1 ? board.history.length - 1 : historyIndex;
+    tmpBoard.turn = moveNum % 2 === 0 ? 'white' : 'black';
+    return tmpBoard.toFEN();
+  };
+
+  const handleAnalyze = () => {
+    const fen = getViewedFEN();
+    if (!fen) return;
+
+    // Check cache first
+    if (analysisCache[fen]) {
+      setAnalysisLines(analysisCache[fen]);
+      setIsAnalyzing(false);
+      return;
+    }
+
+    // Start analysis
+    if (!analyzerRef.current) {
+      analyzerRef.current = new StockfishEngine();
+    }
+    const analyzer = analyzerRef.current;
+    setIsAnalyzing(true);
+    setAnalysisLines([]);
+
+    analyzer.onAnalysisUpdate = (lines) => {
+      setAnalysisLines([...lines]);
+    };
+    analyzer.onAnalysisDone = (lines) => {
+      setAnalysisLines([...lines]);
+      setAnalysisCache(prev => ({ ...prev, [fen]: [...lines] }));
+      setIsAnalyzing(false);
+    };
+
+    // Small timeout to let the engine finish initialization if needed
+    setTimeout(() => analyzer.analyzePosition(fen, 5, 25), 100);
   };
 
   const isSpectating = view === 'SPECTATING';
   const isVsCPU = view === 'VS_CPU';
+  const isReview = view === 'REVIEW';
   const isMyTurn = board.turn === playerColor;
 
   const statusText = board.gameStatus === 'checkmate'
@@ -457,13 +542,19 @@ function App() {
     <div className="chess-container game-layout">
       <div className="game-wrapper">
         <div className="game-header">
-          <div className="room-badge">{isSpectating ? '📡 Spectating' : isVsCPU ? '🤖 vs Stockfish' : `Room ${roomCode}`}</div>
+          <div className="room-badge">{isReview ? '📜 Review' : isSpectating ? '📡 Spectating' : isVsCPU ? '🤖 vs Stockfish' : `Room ${roomCode}`}</div>
           <div className={`status-bar ${statusClass}`}>{statusText}</div>
         </div>
         <div className="board">{boardRows}</div>
         <div className="controls">
-          <p>{isSpectating ? <b>Observer Mode</b> : isVsCPU ? <>You (White) vs <b>Stockfish</b></> : <>Playing as <b>{playerColor}</b></>}</p>
-          <button className="btn-red" onClick={() => { setView('LOBBY'); setBoard(new Board()); if (stockfishRef.current) { stockfishRef.current.destroy(); stockfishRef.current = null; } }}>Leave Game</button>
+          <p>{isReview ? <b>Game Review</b> : isSpectating ? <b>Observer Mode</b> : isVsCPU ? <>You (White) vs <b>Stockfish</b></> : <>Playing as <b>{playerColor}</b></>}</p>
+          <button className="btn-red" onClick={() => {
+            if (isVsCPU) saveCpuGame(board);
+            setView('LOBBY'); setBoard(new Board());
+            if (stockfishRef.current) { stockfishRef.current.destroy(); stockfishRef.current = null; }
+            if (analyzerRef.current) { analyzerRef.current.destroy(); analyzerRef.current = null; }
+            setAnalysisLines([]); setIsAnalyzing(false);
+          }}>Leave</button>
         </div>
       </div>
 
@@ -487,6 +578,29 @@ function App() {
             );
           })}
         </div>
+
+        {/* Analysis button — show in review mode, or when viewing history in any game */}
+        {(isReview || isVsCPU || isSpectating || historyIndex !== -1) && (
+          <div style={{ marginTop: '12px' }}>
+            <button className="btn-ghost" onClick={handleAnalyze} disabled={isAnalyzing} style={{ fontSize: '13px', padding: '8px' }}>
+              {isAnalyzing ? 'Analyzing…' : '🔍 Analyze Position'}
+            </button>
+          </div>
+        )}
+
+        {/* Analysis results */}
+        {analysisLines.length > 0 && (
+          <div className="analysis-panel">
+            <h4>Engine Lines {isAnalyzing && <span className="loading-dot">●</span>}</h4>
+            {analysisLines.map((line, i) => (
+              <div key={i} className="analysis-line">
+                <span className="analysis-score">{line.score}</span>
+                <span className="analysis-moves">{line.moves.join(' ')}</span>
+                <span className="analysis-depth">d{line.depth}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -150,6 +150,10 @@ io.on('connection', (socket) => {
         }
     });
 
+    socket.on('save_cpu_game', ({ history }) => {
+        saveGame('CPU', history);
+    });
+
     socket.on('get_past_games', () => {
         getPastGames((games) => {
             socket.emit('past_games_list', games);
