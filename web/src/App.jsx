@@ -933,6 +933,8 @@ function App() {
 
     return () => {
       if (positionAnalysisTokenRef.current === token) {
+        positionAnalysisTokenRef.current += 1;
+        analyzer.stopAnalysis();
         setIsAnalyzing(false);
       }
     };
