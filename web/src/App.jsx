@@ -593,7 +593,7 @@ function App() {
     setEngineStats({});
   };
 
-  const initStockfish = (code) => {
+  function initStockfish(code) {
     // Initialize Stockfish with a specific room code
     if (stockfishRef.current) stockfishRef.current.destroy();
     const sf = new StockfishEngine();
@@ -651,7 +651,7 @@ function App() {
       }
     };
     stockfishRef.current = sf;
-  };
+  }
 
   const handleJoinGame = (e) => {
     e.preventDefault();
@@ -826,7 +826,7 @@ function App() {
     e.dataTransfer.setData('text/plain', pos);
   };
 
-  const onDragOver = (e, pos) => {
+  const onDragOver = (e) => {
     e.preventDefault(); // Necessary to allow dropping
     e.dataTransfer.dropEffect = 'move';
   };
@@ -1042,7 +1042,7 @@ function App() {
         key={pos}
         className={`square ${isLight ? 'light' : 'dark'} ${isSelected ? 'selected' : ''} ${isCapture ? 'legal-capture' : ''} ${draggedPos === pos ? 'dragging' : ''}`}
         onClick={() => handleSquareClick(pos)}
-        onDragOver={(e) => onDragOver(e, pos)}
+        onDragOver={onDragOver}
         onDrop={(e) => onDrop(e, pos)}
       >
         {showRank && <span className="coord-label rank">{displayR + 1}</span>}

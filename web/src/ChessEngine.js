@@ -27,7 +27,7 @@ export class Piece {
         return p;
     }
     // Raw pseudo-legal moves (ignoring check)
-    pseudoMoves(board) { return []; }
+    pseudoMoves() { return []; }
 }
 
 export class Pawn extends Piece {
@@ -384,7 +384,6 @@ export class Board {
         if (!move) return false;
 
         // Update en passant square
-        const oldEP = this.enPassantSquare;
         this.enPassantSquare = null;
         if (piece.type === 'pawn') {
             const [, sy] = posToCoord(startPos);

@@ -131,6 +131,9 @@ export class StockfishEngine {
     }
 
     _buildPositionSummary(fen, lines, fallbackBestMove, stats) {
+        const safeFallbackBestMove = fallbackBestMove && fallbackBestMove !== '(none)'
+            ? fallbackBestMove
+            : null;
         const topLines = lines.map((line) => ({
             ...line,
             bestMove: line.bestMove || line.moves[0] || null,
@@ -139,7 +142,7 @@ export class StockfishEngine {
 
         return {
             fen,
-            bestMove: primary?.bestMove || fallbackBestMove || null,
+            bestMove: primary?.bestMove || safeFallbackBestMove,
             score: primary?.score || '0.00',
             numericScore: primary?.numericScore ?? 0,
             depth: primary?.depth || stats.depth || 0,
