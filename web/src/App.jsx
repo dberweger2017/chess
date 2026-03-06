@@ -22,6 +22,8 @@ const PIECE_IMAGES = {
   },
 };
 
+const FILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+
 // Connect to the Node server (using default host for reverse proxy support)
 const socket = io();
 
@@ -32,7 +34,7 @@ function App() {
   const [historyIndex, setHistoryIndex] = useState(-1);
 
   // Multiplayer states
-  const [view, setView] = useState('LOBBY'); // LOBBY, WAITING, SEARCHING, GAME, SPECTATING
+  const [view, setView] = useState('LOBBY');
   const [roomCode, setRoomCode] = useState('');
   const [joinCodeInput, setJoinCodeInput] = useState('');
   const [playerColor, setPlayerColor] = useState(null);
@@ -71,34 +73,26 @@ function App() {
     socket.on('spectator_joined', ({ code, history }) => {
       setRoomCode(code);
       setPlayerColor('spectator');
-
-      // Reconstruct board from history
       const newBoard = new Board();
       if (history && history.length > 0) {
         newBoard.history = history;
         newBoard.pieces = history[history.length - 1].pieces;
-        // Estimate turn based on history length (White moves first)
         newBoard.turn = history.length % 2 === 1 ? 'white' : 'black';
       }
       setBoard(newBoard);
       setView('SPECTATING');
     });
 
-    socket.on('live_games_list', (games) => {
-      setLiveGames(games);
-    });
-
-    socket.on('past_games_list', (games) => {
-      setPastGames(games);
-    });
+    socket.on('live_games_list', (games) => setLiveGames(games));
+    socket.on('past_games_list', (games) => setPastGames(games));
 
     socket.on('opponent_move', ({ startPos, endPos }) => {
       setBoard(prevBoard => {
         const newBoard = Object.assign(Object.create(Object.getPrototypeOf(prevBoard)), prevBoard);
-        newBoard.movePiece(startPos, endPos); // Apply remote move
+        newBoard.movePiece(startPos, endPos);
         return newBoard;
       });
-      setHistoryIndex(-1); // Snap back to present when opponent moves
+      setHistoryIndex(-1);
     });
 
     socket.on('opponent_disconnected', () => {
@@ -121,7 +115,6 @@ function App() {
     };
   }, []);
 
-  // Fetch games when entering lobby
   useEffect(() => {
     if (view === 'LOBBY') {
       socket.emit('get_live_games');
@@ -129,13 +122,8 @@ function App() {
     }
   }, [view]);
 
-  const handleCreateGame = () => {
-    socket.emit('create_game');
-  };
-
-  const handleFindGame = () => {
-    socket.emit('find_game');
-  };
+  const handleCreateGame = () => socket.emit('create_game');
+  const handleFindGame = () => socket.emit('find_game');
 
   const handleJoinGame = (e) => {
     e.preventDefault();
@@ -145,20 +133,17 @@ function App() {
   };
 
   const handleSquareClick = (pos) => {
-    if (view !== 'GAME') return; // Only allow clicks in active game
-    if (historyIndex !== -1) return; // Cannot play moves from the past!
-    if (playerColor === 'spectator') return; // Spectators cannot move
-    if (board.turn !== playerColor) return; // Only allow clicks on our turn
+    if (view !== 'GAME') return;
+    if (historyIndex !== -1) return;
+    if (playerColor === 'spectator') return;
+    if (board.turn !== playerColor) return;
 
     if (selectedPos) {
       if (legalMoves.includes(pos)) {
-        // Perform local move
         const success = board.movePiece(selectedPos, pos);
         if (success) {
-          const newHistoryItem = board.history[board.history.length - 1]; // get the item just pushed
-          // Emit move to server
+          const newHistoryItem = board.history[board.history.length - 1];
           socket.emit('make_move', { code: roomCode, startPos: selectedPos, endPos: pos, newHistoryItem });
-
           setBoard(Object.assign(Object.create(Object.getPrototypeOf(board)), board));
           setSelectedPos(null);
           setLegalMoves([]);
@@ -170,7 +155,6 @@ function App() {
 
     const activePieces = historyIndex === -1 ? board.pieces : board.history[historyIndex].pieces;
     const piece = activePieces[pos];
-    // Can only select our own pieces
     if (piece && piece.color === playerColor && piece.color === board.turn) {
       setSelectedPos(pos);
       setLegalMoves(piece.getMoves(board));
@@ -181,29 +165,34 @@ function App() {
   };
 
   const renderSquare = (c, r) => {
-    // If playing Black, render the board from Black's perspective. Specs and White see normally.
     const displayR = playerColor === 'black' ? r : 7 - r;
     const displayC = playerColor === 'black' ? 7 - c : c;
-
     const pos = Board.coordToPos([displayC, displayR]);
     const activePieces = historyIndex === -1 ? board.pieces : board.history[historyIndex].pieces;
     const piece = activePieces[pos];
     const isLight = (displayC + displayR) % 2 !== 0;
     const isSelected = selectedPos === pos;
     const isLegalMove = legalMoves.includes(pos);
+    const isCapture = isLegalMove && piece;
+
+    // Show file label on the bottom row, rank label on the leftmost column
+    const showFile = r === 7;
+    const showRank = c === 0;
 
     return (
       <div
         key={pos}
-        className={`square ${isLight ? 'light' : 'dark'} ${isSelected ? 'selected' : ''}`}
+        className={`square ${isLight ? 'light' : 'dark'} ${isSelected ? 'selected' : ''} ${isCapture ? 'legal-capture' : ''}`}
         onClick={() => handleSquareClick(pos)}
       >
+        {showRank && <span className="coord-label rank">{displayR + 1}</span>}
+        {showFile && <span className="coord-label file">{FILES[displayC]}</span>}
         {isLegalMove && <div className="legal-move-hint" />}
         {piece && (
           <img
             src={PIECE_IMAGES[piece.color][piece.type]}
             alt={`${piece.color} ${piece.type}`}
-            className={`piece ${piece.color}`}
+            className="piece"
             draggable="false"
           />
         )}
@@ -211,26 +200,26 @@ function App() {
     );
   };
 
+  // ──────── LOBBY ────────
   if (view === 'LOBBY') {
     return (
       <div className="chess-container" style={{ maxWidth: '900px' }}>
-        <h1 style={{ fontSize: '40px', marginBottom: '40px' }}>Chess App</h1>
+        <h1><span className="icon">♟</span>Chess App</h1>
+        <p className="subtitle">Real-time multiplayer chess</p>
 
         <div className="lobby-grid">
-          {/* Card 1: Random Game */}
           <div className="card">
+            <span className="card-icon">⚡</span>
             <h2>Quick Match</h2>
-            <p>Find a random opponent instantly.</p>
-            <button className="primary-btn" onClick={handleFindGame} style={{ background: '#27ae60' }}>
-              Find Random Match
-            </button>
+            <p>Find a random opponent instantly</p>
+            <button className="btn-green" onClick={handleFindGame}>Find Match</button>
           </div>
 
-          {/* Card 2: Play with Friend */}
           <div className="card">
+            <span className="card-icon">🤝</span>
             <h2>Play with Friend</h2>
-            <p>Create a room or join one.</p>
-            <button className="primary-btn" onClick={handleCreateGame} style={{ marginBottom: '10px' }}>Create Game</button>
+            <p>Create a private room or join one</p>
+            <button className="btn-blue" onClick={handleCreateGame} style={{ marginBottom: '10px' }}>Create Game</button>
             <form onSubmit={handleJoinGame} className="join-form">
               <input
                 type="text"
@@ -239,16 +228,16 @@ function App() {
                 value={joinCodeInput}
                 onChange={(e) => setJoinCodeInput(e.target.value.toUpperCase())}
               />
-              <button type="submit" className="secondary-btn">Join Game</button>
+              <button type="submit" className="btn-orange">Join Game</button>
             </form>
           </div>
 
-          {/* Card 3: Live Games */}
           <div className="card list-card">
-            <h2>Live Games (Spectate)</h2>
-            <p>Watch active games.</p>
+            <span className="card-icon">📡</span>
+            <h2>Live Games</h2>
+            <p>Watch active matches</p>
             <div className="item-list">
-              {liveGames.length === 0 ? <p className="empty-msg">No active games.</p> :
+              {liveGames.length === 0 ? <p className="empty-msg">No active games right now</p> :
                 liveGames.map(game => (
                   <div key={game.code} className="list-item" onClick={() => socket.emit('spectate_game', game.code)}>
                     <span>Room {game.code}</span>
@@ -259,12 +248,12 @@ function App() {
             </div>
           </div>
 
-          {/* Card 4: Past Games */}
           <div className="card list-card">
+            <span className="card-icon">📜</span>
             <h2>Past Games</h2>
-            <p>Review finished games.</p>
+            <p>Review completed matches</p>
             <div className="item-list">
-              {pastGames.length === 0 ? <p className="empty-msg">No past games yet.</p> :
+              {pastGames.length === 0 ? <p className="empty-msg">No past games yet</p> :
                 pastGames.map(game => (
                   <div key={game.id} className="list-item">
                     <span>Room {game.room_code}</span>
@@ -274,35 +263,38 @@ function App() {
               }
             </div>
           </div>
-
         </div>
+
         {errorStatus && <p className="error">{errorStatus}</p>}
       </div>
     );
   }
 
+  // ──────── WAITING ────────
   if (view === 'WAITING') {
     return (
-      <div className="chess-container lobby">
+      <div className="chess-container">
         <h1>Waiting for Opponent</h1>
-        <p>Your Game Code is:</p>
-        <h2 className="room-code">{roomCode}</h2>
-        <p className="loading-dots">Waiting</p>
+        <p className="subtitle">Share this code with a friend</p>
+        <div className="room-code-display">{roomCode}</div>
+        <p className="loading-pulse">Waiting for opponent to join…</p>
       </div>
     );
   }
 
+  // ──────── SEARCHING ────────
   if (view === 'SEARCHING') {
     return (
-      <div className="chess-container lobby">
+      <div className="chess-container">
         <h1>Matchmaking</h1>
-        <p>Looking for an opponent...</p>
-        <p className="loading-dots" style={{ marginTop: '20px', fontSize: '30px' }}>🔍</p>
+        <p className="subtitle">Looking for an opponent…</p>
+        <div className="search-icon">♟</div>
+        <p className="loading-pulse">Searching…</p>
       </div>
     );
   }
 
-  // GAME view
+  // ──────── GAME / SPECTATING VIEW ────────
   const boardRows = [];
   for (let r = 0; r < 8; r++) {
     for (let c = 0; c < 8; c++) {
@@ -312,7 +304,7 @@ function App() {
 
   const handleHistoryClick = (idx) => {
     if (idx === board.history.length - 1) {
-      setHistoryIndex(-1); // Back to live
+      setHistoryIndex(-1);
     } else {
       setHistoryIndex(idx);
     }
@@ -321,28 +313,34 @@ function App() {
   };
 
   const isSpectating = view === 'SPECTATING';
+  const isMyTurn = board.turn === playerColor;
+
+  const statusText = historyIndex !== -1
+    ? "Viewing History"
+    : isSpectating
+      ? `${board.turn === 'white' ? 'White' : 'Black'} to move`
+      : isMyTurn ? "Your Turn" : "Opponent's Turn";
+
+  const statusClass = historyIndex !== -1
+    ? 'analyzing'
+    : isMyTurn && !isSpectating ? '' : 'opponent-turn';
 
   return (
-    <div className="chess-container" style={{ flexDirection: 'row', alignItems: 'flex-start', maxWidth: '850px', justifyContent: 'space-between' }}>
-
+    <div className="chess-container game-layout">
       <div className="game-wrapper">
         <div className="game-header">
-          <div className="room-badge">{isSpectating ? 'Spectating ' : 'Room: '}{roomCode}</div>
-          <div className="status-bar">
-            {historyIndex !== -1 ? "Analyzing Past Move" : (isSpectating ? `Turn: ${board.turn}` : (board.turn === playerColor ? "Your Turn" : "Opponent's Turn"))}
-          </div>
+          <div className="room-badge">{isSpectating ? '📡 Spectating' : `Room ${roomCode}`}</div>
+          <div className={`status-bar ${statusClass}`}>{statusText}</div>
         </div>
-        <div className="board">
-          {boardRows}
-        </div>
+        <div className="board">{boardRows}</div>
         <div className="controls">
-          <p>{isSpectating ? <b>Observer</b> : `You are playing as ${playerColor}`}</p>
-          <button onClick={() => { setView('LOBBY'); setBoard(new Board()); }} style={{ marginTop: '10px', background: '#e74c3c' }}>Leave to Lobby</button>
+          <p>{isSpectating ? <b>Observer Mode</b> : <>Playing as <b>{playerColor}</b></>}</p>
+          <button className="btn-red" onClick={() => { setView('LOBBY'); setBoard(new Board()); }}>Leave Game</button>
         </div>
       </div>
 
       <div className="history-panel">
-        <h3>Move History</h3>
+        <h3>Moves</h3>
         <div className="history-list">
           {board.history.map((snapshot, idx) => {
             const isActive = historyIndex === idx || (historyIndex === -1 && idx === board.history.length - 1);
@@ -358,7 +356,6 @@ function App() {
           })}
         </div>
       </div>
-
     </div>
   );
 }
