@@ -137,6 +137,7 @@ function App() {
     if (historyIndex !== -1) return;
     if (playerColor === 'spectator') return;
     if (board.turn !== playerColor) return;
+    if (board.gameStatus !== 'active') return;
 
     if (selectedPos) {
       if (legalMoves.includes(pos)) {
@@ -153,11 +154,12 @@ function App() {
       }
     }
 
+    // Select a piece — use the new legal moves API
     const activePieces = historyIndex === -1 ? board.pieces : board.history[historyIndex].pieces;
     const piece = activePieces[pos];
     if (piece && piece.color === playerColor && piece.color === board.turn) {
       setSelectedPos(pos);
-      setLegalMoves(piece.getMoves(board));
+      setLegalMoves(board.getLegalMovesForPiece(pos));
     } else {
       setSelectedPos(null);
       setLegalMoves([]);
@@ -315,15 +317,21 @@ function App() {
   const isSpectating = view === 'SPECTATING';
   const isMyTurn = board.turn === playerColor;
 
-  const statusText = historyIndex !== -1
-    ? "Viewing History"
-    : isSpectating
-      ? `${board.turn === 'white' ? 'White' : 'Black'} to move`
-      : isMyTurn ? "Your Turn" : "Opponent's Turn";
+  const statusText = board.gameStatus === 'checkmate'
+    ? `Checkmate! ${board.turn === 'white' ? 'Black' : 'White'} wins!`
+    : board.gameStatus === 'stalemate'
+      ? 'Stalemate — Draw!'
+      : historyIndex !== -1
+        ? 'Viewing History'
+        : isSpectating
+          ? `${board.turn === 'white' ? 'White' : 'Black'} to move`
+          : isMyTurn ? 'Your Turn' : "Opponent's Turn";
 
-  const statusClass = historyIndex !== -1
+  const statusClass = board.gameStatus !== 'active'
     ? 'analyzing'
-    : isMyTurn && !isSpectating ? '' : 'opponent-turn';
+    : historyIndex !== -1
+      ? 'analyzing'
+      : isMyTurn && !isSpectating ? '' : 'opponent-turn';
 
   return (
     <div className="chess-container game-layout">
