@@ -437,9 +437,30 @@ function App() {
     startPendingAutoAnalysis();
   };
 
+  function buildMultiplayerResultPayload(nextBoard) {
+    if (nextBoard.gameStatus === 'checkmate') {
+      const winnerColor = nextBoard.turn === 'white' ? 'black' : 'white';
+      return {
+        result: winnerColor === 'white' ? 'white_win' : 'black_win',
+        winnerColor,
+        termination: 'checkmate'
+      };
+    }
+
+    if (nextBoard.gameStatus === 'stalemate' || nextBoard.gameStatus === 'draw') {
+      return {
+        result: 'draw',
+        winnerColor: null,
+        termination: nextBoard.gameStatus === 'draw' ? 'draw_agreement' : 'stalemate'
+      };
+    }
+
+    return null;
+  }
+
   function saveCpuGame(nextBoard) {
     if (nextBoard && nextBoard.history && nextBoard.history.length > 1) {
-      socket.emit('save_cpu_game', { history: nextBoard.history });
+      socket.emit('save_cpu_game', { code: roomCode, history: nextBoard.history });
     }
   }
 
