@@ -689,6 +689,88 @@ function App() {
     setDraggedPos(null);
   };
 
+  const AnalysisArrows = () => {
+    if (analysisLines.length === 0) return null;
+
+    // Helper to get square center in pixels (board is 8 * var(--sq))
+    // board size is boardSize, square size is boardSize / 8
+    const getSquareCenter = (pos) => {
+      const [c, r] = Board.posToCoord(pos);
+      // c, r are 0-7 from white's perspective
+      // We need to account for board flipping (playerColor === 'black')
+      let displayC = playerColor === 'black' ? 7 - c : c;
+      let displayR = playerColor === 'black' ? r : 7 - r;
+
+      // Center of sq (50% of square size)
+      const x = (displayC + 0.5) * (100 / 8);
+      const y = (displayR + 0.5) * (100 / 8);
+      return { x: `${x}%`, y: `${y}%` };
+    };
+
+    // Calculate relative weights for arrows
+    // We normalize scores to a 0-1 range among the top 5
+    const parsedLines = analysisLines.map(line => {
+      let numericScore = 0;
+      if (line.score.startsWith('M')) {
+        numericScore = line.score.includes('-') ? -10000 : 10000;
+      } else {
+        numericScore = parseFloat(line.score) * 100;
+      }
+      return { ...line, numericScore };
+    });
+
+    const maxScore = Math.max(...parsedLines.map(l => l.numericScore));
+    const minScore = Math.min(...parsedLines.map(l => l.numericScore));
+    const range = maxScore - minScore || 1;
+
+    return (
+      <svg className="analysis-arrows-overlay" style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        width: '100%',
+        height: '100%',
+        pointerEvents: 'none',
+        zIndex: 10
+      }}>
+        <defs>
+          <marker id="arrowhead" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+            <path d="M0,0 L6,3 L0,6 Z" fill="rgba(0, 242, 255, 0.8)" />
+          </marker>
+        </defs>
+        {parsedLines.map((line, idx) => {
+          const move = line.moves[0];
+          if (!move) return null;
+          const fromPos = move.slice(0, 2);
+          const toPos = move.slice(2, 4);
+
+          const from = getSquareCenter(fromPos);
+          const to = getSquareCenter(toPos);
+
+          // Weight from 0.3 to 1.0
+          const weight = 0.3 + (parsedLines.length > 1 ? (line.numericScore - minScore) / range : 0.7) * 0.7;
+          const thickness = 4 + weight * 8;
+          const opacity = 0.2 + weight * 0.8;
+
+          return (
+            <line
+              key={idx}
+              x1={from.x}
+              y1={from.y}
+              x2={to.x}
+              y2={to.y}
+              stroke="rgba(0, 242, 255, 0.6)"
+              strokeWidth={thickness}
+              strokeOpacity={opacity}
+              markerEnd="url(#arrowhead)"
+              style={{ transition: 'all 0.3s ease' }}
+            />
+          );
+        })}
+      </svg>
+    );
+  };
+
   const renderSquare = (c, r) => {
     const displayR = playerColor === 'black' ? r : 7 - r;
     const displayC = playerColor === 'black' ? 7 - c : c;
@@ -853,248 +935,253 @@ function App() {
           </div>
         </div>
 
-        );
+        {errorStatus && <p className="error">{errorStatus}</p>}
+      </div>
+    );
   }
 
-        // ──────── WAITING ────────
-        if (view === 'WAITING') {
+  // ──────── WAITING ────────
+  if (view === 'WAITING') {
     return (
-        <div className="chess-container">
-          <h1>Waiting for Opponent</h1>
-          <p className="subtitle">Share this code with a friend</p>
-          <div className="room-code-display">{roomCode}</div>
-          <p className="loading-pulse">Waiting for opponent to join…</p>
-        </div>
-        );
+      <div className="chess-container">
+        <h1>Waiting for Opponent</h1>
+        <p className="subtitle">Share this code with a friend</p>
+        <div className="room-code-display">{roomCode}</div>
+        <p className="loading-pulse">Waiting for opponent to join…</p>
+      </div>
+    );
   }
 
-        // ──────── SEARCHING ────────
-        if (view === 'SEARCHING') {
+  // ──────── SEARCHING ────────
+  if (view === 'SEARCHING') {
     return (
-        <div className="chess-container">
-          <h1>Matchmaking</h1>
-          <p className="subtitle">Looking for an opponent…</p>
-          <div className="search-icon">♟</div>
-          <p className="loading-pulse">Searching…</p>
-          <button className="btn-red" onClick={handleCancelFindGame} style={{ marginTop: '20px' }}>Cancel Search</button>
-        </div>
-        );
+      <div className="chess-container">
+        <h1>Matchmaking</h1>
+        <p className="subtitle">Looking for an opponent…</p>
+        <div className="search-icon">♟</div>
+        <p className="loading-pulse">Searching…</p>
+        <button className="btn-red" onClick={handleCancelFindGame} style={{ marginTop: '20px' }}>Cancel Search</button>
+      </div>
+    );
   }
 
-        // ──────── GAME / SPECTATING / VS_CPU VIEW ────────
-        const boardRows = [];
-        for (let r = 0; r < 8; r++) {
+  // ──────── GAME / SPECTATING / VS_CPU VIEW ────────
+  const boardRows = [];
+  for (let r = 0; r < 8; r++) {
     for (let c = 0; c < 8; c++) {
-          boardRows.push(renderSquare(c, r));
+      boardRows.push(renderSquare(c, r));
     }
   }
 
   const handleHistoryClick = (idx) => {
     if (idx === board.history.length - 1) {
-          setHistoryIndex(-1);
+      setHistoryIndex(-1);
     } else {
-          setHistoryIndex(idx);
+      setHistoryIndex(idx);
     }
-        setSelectedPos(null);
-        setLegalMoves([]);
-        // Stop current analysis when navigating
-        setIsAnalyzing(false);
-        setAnalysisLines([]);
+    setSelectedPos(null);
+    setLegalMoves([]);
+    // Stop current analysis when navigating
+    setIsAnalyzing(false);
+    setAnalysisLines([]);
   };
 
   // Analysis: compute FEN for the current position being viewed
   const getViewedFEN = () => {
     // Build a temporary board from the history snapshot
     const snapshot = historyIndex === -1
-        ? board.history[board.history.length - 1]
-        : board.history[historyIndex];
-        if (!snapshot) return null;
-        const tmpBoard = new Board();
-        tmpBoard.pieces = snapshot.pieces;
-        const moveNum = historyIndex === -1 ? board.history.length - 1 : historyIndex;
-        tmpBoard.turn = moveNum % 2 === 0 ? 'white' : 'black';
-        return tmpBoard.toFEN();
+      ? board.history[board.history.length - 1]
+      : board.history[historyIndex];
+    if (!snapshot) return null;
+    const tmpBoard = new Board();
+    tmpBoard.pieces = snapshot.pieces;
+    const moveNum = historyIndex === -1 ? board.history.length - 1 : historyIndex;
+    tmpBoard.turn = moveNum % 2 === 0 ? 'white' : 'black';
+    return tmpBoard.toFEN();
   };
 
   const handleAnalyze = () => {
     const fen = getViewedFEN();
-        if (!fen) return;
+    if (!fen) return;
 
-        // Check cache first
-        if (analysisCache[fen]) {
-          setAnalysisLines(analysisCache[fen]);
-        setIsAnalyzing(false);
-        return;
+    // Check cache first
+    if (analysisCache[fen]) {
+      setAnalysisLines(analysisCache[fen]);
+      setIsAnalyzing(false);
+      return;
     }
 
-        // Start analysis
-        if (!analyzerRef.current) {
-          analyzerRef.current = new StockfishEngine();
+    // Start analysis
+    if (!analyzerRef.current) {
+      analyzerRef.current = new StockfishEngine();
     }
-        const analyzer = analyzerRef.current;
-        setIsAnalyzing(true);
-        setAnalysisLines([]);
+    const analyzer = analyzerRef.current;
+    setIsAnalyzing(true);
+    setAnalysisLines([]);
 
     analyzer.onAnalysisUpdate = (lines) => {
-          setAnalysisLines([...lines]);
+      setAnalysisLines([...lines]);
     };
     analyzer.onAnalysisDone = (lines) => {
-          setAnalysisLines([...lines]);
-      setAnalysisCache(prev => ({...prev, [fen]: [...lines] }));
-        setIsAnalyzing(false);
+      setAnalysisLines([...lines]);
+      setAnalysisCache(prev => ({ ...prev, [fen]: [...lines] }));
+      setIsAnalyzing(false);
     };
 
     // Small timeout to let the engine finish initialization if needed
     setTimeout(() => analyzer.analyzePosition(fen, 5, 25), 100);
   };
 
-        const isSpectating = view === 'SPECTATING';
-        const isVsCPU = view === 'VS_CPU';
-        const isReview = view === 'REVIEW';
-        const isMyTurn = board.turn === playerColor;
+  const isSpectating = view === 'SPECTATING';
+  const isVsCPU = view === 'VS_CPU';
+  const isReview = view === 'REVIEW';
+  const isMyTurn = board.turn === playerColor;
 
-        const statusText = board.gameStatus === 'checkmate'
-        ? `Checkmate! ${board.turn === 'white' ? 'Black' : 'White'} wins!`
-        : board.gameStatus === 'stalemate'
-        ? 'Stalemate \u2014 Draw!'
-        : cpuThinking
+  const statusText = board.gameStatus === 'checkmate'
+    ? `Checkmate! ${board.turn === 'white' ? 'Black' : 'White'} wins!`
+    : board.gameStatus === 'stalemate'
+      ? 'Stalemate \u2014 Draw!'
+      : cpuThinking
         ? 'Engine is thinking\u2026'
         : historyIndex !== -1
-        ? 'Viewing History'
-        : isSpectating
-        ? `${board.turn === 'white' ? 'White' : 'Black'} to move`
-        : isMyTurn ? 'Your Turn' : (isVsCPU ? 'Engine is thinking\u2026' : "Opponent's Turn");
+          ? 'Viewing History'
+          : isSpectating
+            ? `${board.turn === 'white' ? 'White' : 'Black'} to move`
+            : isMyTurn ? 'Your Turn' : (isVsCPU ? 'Engine is thinking\u2026' : "Opponent's Turn");
 
-        const statusClass = board.gameStatus !== 'active'
-        ? 'analyzing'
-        : cpuThinking || historyIndex !== -1
-        ? 'analyzing'
-        : isMyTurn && !isSpectating ? '' : 'opponent-turn';
+  const statusClass = board.gameStatus !== 'active'
+    ? 'analyzing'
+    : cpuThinking || historyIndex !== -1
+      ? 'analyzing'
+      : isMyTurn && !isSpectating ? '' : 'opponent-turn';
 
-        return (
-        <div className="chess-container game-layout">
-          <div className="game-wrapper">
-            <div className="game-header">
-              <div className="room-badge">{isReview ? '📜 Review' : isSpectating ? '📡 Spectating' : isVsCPU ? '🤖 vs Stockfish' : `Room ${roomCode}`}</div>
-              {view === 'GAME' && (
-                <button className="btn-ghost" onClick={() => window.open(`/?spectate=${roomCode}`, '_blank')} style={{ fontSize: '11px', padding: '4px 8px', marginLeft: 'auto' }}>
-                  🔍 Live Spectator Analysis
-                </button>
-              )}
-              <div className={`status-bar ${statusClass}`} style={{ marginLeft: view === 'GAME' ? '8px' : 'auto' }}>{statusText}</div>
-            </div>
-            <div className="board">{boardRows}</div>
-            <div className="controls">
-              <p>{isReview ? <b>Game Review</b> : isSpectating ? <b>Observer Mode</b> : isVsCPU ? <>You (White) vs <b>Stockfish</b></> : <>Playing as <b>{playerColor}</b></>}</p>
-              <button className="btn-red" onClick={() => {
-                if (isVsCPU) saveCpuGame(board);
-                setView('LOBBY'); setBoard(new Board());
-                if (stockfishRef.current) { stockfishRef.current.destroy(); stockfishRef.current = null; }
-                if (analyzerRef.current) { analyzerRef.current.destroy(); analyzerRef.current = null; }
-                setAnalysisLines([]); setIsAnalyzing(false);
-              }}>Leave</button>
-            </div>
-          </div>
-
-          <div className="history-panel">
-            <h3>Moves</h3>
-
-            {/* Evaluation Chart */}
-            {gameAnalysis.length > 0 && (
-              <div className="evaluation-chart" style={{ height: '100px', marginBottom: '12px', background: 'rgba(0,0,0,0.2)', padding: '5px', borderRadius: '8px' }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={gameAnalysis}>
-                    <YAxis domain={[-10, 10]} hide />
-                    <Tooltip
-                      cursor={{ stroke: 'rgba(255,255,255,0.1)' }}
-                      contentStyle={{ backgroundColor: '#1e1e2f', border: '1px solid #333', fontSize: '11px', borderRadius: '4px' }}
-                      labelFormatter={(idx) => `Move ${idx}`}
-                      formatter={(value) => [Number(value).toFixed(2), 'Eval']}
-                    />
-                    <ReferenceLine y={0} stroke="#444" strokeDasharray="3 3" />
-                    <Line type="monotone" dataKey="numericScore" stroke="#8b5cf6" strokeWidth={2} dot={false} isAnimationActive={false} />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            )}
-
-            {/* Analysis Progress Bar */}
-            {analysisProgress && (
-              <div className="analysis-progress-container" style={{ marginBottom: '12px', background: 'rgba(0,0,0,0.3)', borderRadius: '4px', overflow: 'hidden' }}>
-                <div style={{ height: '4px', width: `${(analysisProgress.current / analysisProgress.total) * 100}%`, background: 'var(--green)', transition: 'width 0.2s' }}></div>
-                <div style={{ fontSize: '10px', color: 'var(--text-muted)', textAlign: 'center', padding: '4px' }}>
-                  Analyzing game {Math.min(analysisProgress.current + 1, analysisProgress.total)} / {analysisProgress.total}...
-                </div>
-              </div>
-            )}
-
-            <div className="history-list">
-              {board.history.map((snapshot, idx) => {
-                const isActive = historyIndex === idx || (historyIndex === -1 && idx === board.history.length - 1);
-                const stats = engineStats[idx];
-                // Analysis of the position BEFORE this move was made
-                const analysis = idx > 0 ? gameAnalysis[idx - 1] : null;
-                return (
-                  <div
-                    key={idx}
-                    className={`history-item ${isActive ? 'active' : ''}`}
-                    onClick={() => handleHistoryClick(idx)}
-                    style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '4px' }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
-                      <span>{idx === 0 ? "Start" : `${idx}. ${snapshot.move}`}</span>
-                      {stats && (
-                        <span className="engine-stats">d{stats.depth} · {(stats.timeMs / 1000).toFixed(1)}s</span>
-                      )}
-                    </div>
-                    {analysis && idx > 0 && (
-                      <div className="move-analysis" style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'flex', gap: '8px' }}>
-                        <span style={{ color: analysis.numericScore > 0 ? '#4ade80' : analysis.numericScore < -0 ? '#f87171' : '#9ca3af' }}>{analysis.score}</span>
-                        <span>Best: {analysis.bestMove}</span>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Analysis button — show in review mode, or when viewing history in any game */}
-            {(isReview || isVsCPU || isSpectating || historyIndex !== -1) && (
-              <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <button className="btn-ghost" onClick={handleAnalyze} disabled={isAnalyzing} style={{ fontSize: '13px', padding: '8px' }}>
-                  {isAnalyzing ? 'Analyzing Position…' : '🔍 Analyze This Position Here'}
-                </button>
-                <button className="btn-blue"
-                  onClick={() => {
-                    const analysisId = savedGameId;
-                    if (analysisId) {
-                      window.open('/?analysis=' + analysisId, '_blank');
-                    } else {
-                      window.open('/?spectate=' + roomCode, '_blank');
-                    }
-                  }}
-                  style={{ fontSize: '13px', padding: '8px' }}>
-                  📊 Analyze Full Game in New Tab
-                </button>
-              </div>
-            )}
-
-            {/* Analysis results */}
-            {analysisLines.length > 0 && (
-              <div className="analysis-panel">
-                <h4>Engine Lines {isAnalyzing && <span className="loading-dot">●</span>}</h4>
-                {analysisLines.map((line, i) => (
-                  <div key={i} className="analysis-line">
-                    <span className="analysis-score">{line.score}</span>
-                    <span className="analysis-moves">{line.moves.join(' ')}</span>
-                    <span className="analysis-depth">d{line.depth}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+  return (
+    <div className="chess-container game-layout">
+      <div className="game-wrapper">
+        <div className="game-header">
+          <div className="room-badge">{isReview ? '📜 Review' : isSpectating ? '📡 Spectating' : isVsCPU ? '🤖 vs Stockfish' : `Room ${roomCode}`}</div>
+          {view === 'GAME' && (
+            <button className="btn-ghost" onClick={() => window.open(`/?spectate=${roomCode}`, '_blank')} style={{ fontSize: '11px', padding: '4px 8px', marginLeft: 'auto' }}>
+              🔍 Live Spectator Analysis
+            </button>
+          )}
+          <div className={`status-bar ${statusClass}`} style={{ marginLeft: view === 'GAME' ? '8px' : 'auto' }}>{statusText}</div>
         </div>
-        );
+        <div className="board" style={{ position: 'relative' }}>
+          <AnalysisArrows />
+          {boardRows}
+        </div>
+        <div className="controls">
+          <p>{isReview ? <b>Game Review</b> : isSpectating ? <b>Observer Mode</b> : isVsCPU ? <>You (White) vs <b>Stockfish</b></> : <>Playing as <b>{playerColor}</b></>}</p>
+          <button className="btn-red" onClick={() => {
+            if (isVsCPU) saveCpuGame(board);
+            setView('LOBBY'); setBoard(new Board());
+            if (stockfishRef.current) { stockfishRef.current.destroy(); stockfishRef.current = null; }
+            if (analyzerRef.current) { analyzerRef.current.destroy(); analyzerRef.current = null; }
+            setAnalysisLines([]); setIsAnalyzing(false);
+          }}>Leave</button>
+        </div>
+      </div>
+
+      <div className="history-panel">
+        <h3>Moves</h3>
+
+        {/* Evaluation Chart */}
+        {gameAnalysis.length > 0 && (
+          <div className="evaluation-chart" style={{ height: '100px', marginBottom: '12px', background: 'rgba(0,0,0,0.2)', padding: '5px', borderRadius: '8px' }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={gameAnalysis}>
+                <YAxis domain={[-10, 10]} hide />
+                <Tooltip
+                  cursor={{ stroke: 'rgba(255,255,255,0.1)' }}
+                  contentStyle={{ backgroundColor: '#1e1e2f', border: '1px solid #333', fontSize: '11px', borderRadius: '4px' }}
+                  labelFormatter={(idx) => `Move ${idx}`}
+                  formatter={(value) => [Number(value).toFixed(2), 'Eval']}
+                />
+                <ReferenceLine y={0} stroke="#444" strokeDasharray="3 3" />
+                <Line type="monotone" dataKey="numericScore" stroke="#8b5cf6" strokeWidth={2} dot={false} isAnimationActive={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+
+        {/* Analysis Progress Bar */}
+        {analysisProgress && (
+          <div className="analysis-progress-container" style={{ marginBottom: '12px', background: 'rgba(0,0,0,0.3)', borderRadius: '4px', overflow: 'hidden' }}>
+            <div style={{ height: '4px', width: `${(analysisProgress.current / analysisProgress.total) * 100}%`, background: 'var(--green)', transition: 'width 0.2s' }}></div>
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', textAlign: 'center', padding: '4px' }}>
+              Analyzing game {Math.min(analysisProgress.current + 1, analysisProgress.total)} / {analysisProgress.total}...
+            </div>
+          </div>
+        )}
+
+        <div className="history-list">
+          {board.history.map((snapshot, idx) => {
+            const isActive = historyIndex === idx || (historyIndex === -1 && idx === board.history.length - 1);
+            const stats = engineStats[idx];
+            // Analysis of the position BEFORE this move was made
+            const analysis = idx > 0 ? gameAnalysis[idx - 1] : null;
+            return (
+              <div
+                key={idx}
+                className={`history-item ${isActive ? 'active' : ''}`}
+                onClick={() => handleHistoryClick(idx)}
+                style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '4px' }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                  <span>{idx === 0 ? "Start" : `${idx}. ${snapshot.move}`}</span>
+                  {stats && (
+                    <span className="engine-stats">d{stats.depth} · {(stats.timeMs / 1000).toFixed(1)}s</span>
+                  )}
+                </div>
+                {analysis && idx > 0 && (
+                  <div className="move-analysis" style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'flex', gap: '8px' }}>
+                    <span style={{ color: analysis.numericScore > 0 ? '#4ade80' : analysis.numericScore < -0 ? '#f87171' : '#9ca3af' }}>{analysis.score}</span>
+                    <span>Best: {analysis.bestMove}</span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Analysis button — show in review mode, or when viewing history in any game */}
+        {(isReview || isVsCPU || isSpectating || historyIndex !== -1) && (
+          <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <button className="btn-ghost" onClick={handleAnalyze} disabled={isAnalyzing} style={{ fontSize: '13px', padding: '8px' }}>
+              {isAnalyzing ? 'Analyzing Position…' : '🔍 Analyze This Position Here'}
+            </button>
+            <button className="btn-blue"
+              onClick={() => {
+                const analysisId = savedGameId;
+                if (analysisId) {
+                  window.open('/?analysis=' + analysisId, '_blank');
+                } else {
+                  window.open('/?spectate=' + roomCode, '_blank');
+                }
+              }}
+              style={{ fontSize: '13px', padding: '8px' }}>
+              📊 Analyze Full Game in New Tab
+            </button>
+          </div>
+        )}
+
+        {/* Analysis results */}
+        {analysisLines.length > 0 && (
+          <div className="analysis-panel">
+            <h4>Engine Lines {isAnalyzing && <span className="loading-dot">●</span>}</h4>
+            {analysisLines.map((line, i) => (
+              <div key={i} className="analysis-line">
+                <span className="analysis-score">{line.score}</span>
+                <span className="analysis-moves">{line.moves.join(' ')}</span>
+                <span className="analysis-depth">d{line.depth}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
-        export default App;
+export default App;
