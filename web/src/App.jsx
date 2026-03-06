@@ -25,9 +25,82 @@ const PIECE_IMAGES = {
 };
 
 const FILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+const REVIEW_ANALYSIS_DEPTH = 10;
+const LIVE_ANALYSIS_DEPTH = 24;
+const ANALYSIS_LINE_COUNT = 5;
+const ANALYSIS_SCHEMA_VERSION = 2;
 
 // Connect to the Node server (using default host for reverse proxy support)
 const socket = io();
+
+function getSnapshotTurn(snapshot, index) {
+  return snapshot?.turn || (index % 2 === 0 ? 'white' : 'black');
+}
+
+function getSnapshotFullMoveNumber(snapshot, index) {
+  return snapshot?.fullMoveNumber || Math.floor(index / 2) + 1;
+}
+
+function createBoardFromHistory(history, { ended = false } = {}) {
+  const nextBoard = new Board();
+  if (!Array.isArray(history) || history.length === 0) return nextBoard;
+
+  const lastSnapshot = history[history.length - 1];
+  nextBoard.history = history;
+  nextBoard.pieces = lastSnapshot.pieces;
+  nextBoard.turn = getSnapshotTurn(lastSnapshot, history.length - 1);
+  nextBoard.enPassantSquare = lastSnapshot.enPassantSquare || null;
+  nextBoard.halfMoveClock = lastSnapshot.halfMoveClock || 0;
+  nextBoard.fullMoveNumber = getSnapshotFullMoveNumber(lastSnapshot, history.length - 1);
+  nextBoard.gameStatus = ended ? 'ended' : (lastSnapshot.gameStatus || nextBoard.gameStatus);
+
+  return nextBoard;
+}
+
+function getFenFromSnapshot(snapshot, index) {
+  if (!snapshot) return null;
+
+  const tmpBoard = new Board();
+  tmpBoard.pieces = snapshot.pieces;
+  tmpBoard.turn = getSnapshotTurn(snapshot, index);
+  tmpBoard.enPassantSquare = snapshot.enPassantSquare || null;
+  tmpBoard.halfMoveClock = snapshot.halfMoveClock || 0;
+  tmpBoard.fullMoveNumber = getSnapshotFullMoveNumber(snapshot, index);
+  return tmpBoard.toFEN();
+}
+
+function buildFenList(history) {
+  return history.map((snapshot, index) => getFenFromSnapshot(snapshot, index));
+}
+
+function buildAnalysisPackage(positions, depth) {
+  return {
+    schemaVersion: ANALYSIS_SCHEMA_VERSION,
+    depth,
+    numLines: ANALYSIS_LINE_COUNT,
+    positions
+  };
+}
+
+function normalizeStoredAnalysis(rawAnalysis, expectedLength, minimumDepth) {
+  if (!rawAnalysis) return null;
+
+  try {
+    const parsed = typeof rawAnalysis === 'string' ? JSON.parse(rawAnalysis) : rawAnalysis;
+    if (!parsed || parsed.schemaVersion !== ANALYSIS_SCHEMA_VERSION || !Array.isArray(parsed.positions)) {
+      return null;
+    }
+
+    if (parsed.positions.length !== expectedLength || (parsed.depth || 0) < minimumDepth) {
+      return null;
+    }
+
+    const hasTopLines = parsed.positions.every((position) => position && Array.isArray(position.topLines));
+    return hasTopLines ? parsed.positions : null;
+  } catch {
+    return null;
+  }
+}
 
 function App() {
   const [board, setBoard] = useState(new Board());
@@ -47,12 +120,19 @@ function App() {
   const [analysisLines, setAnalysisLines] = useState([]);
   const [analysisCache, setAnalysisCache] = useState({}); // { fen: lines[] }
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const analyzerRef = useRef(null);
+  const positionAnalyzerRef = useRef(null);
+  const gameAnalyzerRef = useRef(null);
+  const positionAnalysisTokenRef = useRef(0);
+  const reviewLoadTokenRef = useRef(0);
+  const autoAnalysisRunningRef = useRef(false);
+  const pendingAutoAnalysisRef = useRef(null);
+  const analysisMetaRef = useRef({ firstFen: null, depth: null });
 
   // Auto Game Analysis
   const [gameAnalysis, setGameAnalysis] = useState([]); // Array of analysis results
   const gameAnalysisRef = useRef([]); // Persistent cache for incremental analysis
   const [analysisProgress, setAnalysisProgress] = useState(null); // { current, total }
+  const [analysisLoadingState, setAnalysisLoadingState] = useState(null);
 
   // Multiplayer states
   const [view, setView] = useState('LOBBY');
@@ -76,8 +156,145 @@ function App() {
   const [tempProfile, setTempProfile] = useState({ name: '' });
   const [profileError, setProfileError] = useState('');
 
+  const destroyEngine = (ref) => {
+    if (ref.current) {
+      ref.current.destroy();
+      ref.current = null;
+    }
+  };
+
+  const resetAnalysisState = () => {
+    positionAnalysisTokenRef.current += 1;
+    autoAnalysisRunningRef.current = false;
+    pendingAutoAnalysisRef.current = null;
+    analysisMetaRef.current = { firstFen: null, depth: null };
+    gameAnalysisRef.current = [];
+    destroyEngine(positionAnalyzerRef);
+    destroyEngine(gameAnalyzerRef);
+    setGameAnalysis([]);
+    setAnalysisLines([]);
+    setAnalysisCache({});
+    setIsAnalyzing(false);
+    setAnalysisProgress(null);
+    setAnalysisLoadingState(null);
+  };
+
+  const getViewedPositionIndex = () => {
+    if (board.history.length === 0) return -1;
+    return historyIndex === -1 ? board.history.length - 1 : historyIndex;
+  };
+
+  const getViewedFEN = () => {
+    const positionIndex = getViewedPositionIndex();
+    if (positionIndex < 0) return null;
+    return getFenFromSnapshot(board.history[positionIndex], positionIndex);
+  };
+
+  const getViewedAnalysisEntry = () => {
+    const positionIndex = getViewedPositionIndex();
+    if (positionIndex < 0) return null;
+    return gameAnalysis[positionIndex] || null;
+  };
+
+  const runAutoAnalysis = (targetBoard, options = {}) => {
+    const {
+      gameId = null,
+      targetDepth = REVIEW_ANALYSIS_DEPTH,
+    } = options;
+
+    return new Promise((resolve) => {
+      const history = targetBoard?.history || [];
+      const allFens = buildFenList(history).filter(Boolean);
+
+      if (allFens.length === 0) {
+        setAnalysisProgress(null);
+        resolve([]);
+        return;
+      }
+
+      const firstFen = allFens[0];
+      const metaChanged = (
+        analysisMetaRef.current.firstFen !== firstFen ||
+        analysisMetaRef.current.depth !== targetDepth ||
+        gameAnalysisRef.current.length > allFens.length
+      );
+
+      if (metaChanged) {
+        analysisMetaRef.current = { firstFen, depth: targetDepth };
+        gameAnalysisRef.current = [];
+        setGameAnalysis([]);
+      }
+
+      const startIdx = gameAnalysisRef.current.length;
+      const unanalyzedFens = allFens.slice(startIdx);
+
+      if (unanalyzedFens.length === 0) {
+        setAnalysisProgress(null);
+        setGameAnalysis([...gameAnalysisRef.current]);
+        resolve(gameAnalysisRef.current);
+        return;
+      }
+
+      if (!gameAnalyzerRef.current) {
+        gameAnalyzerRef.current = new StockfishEngine();
+      }
+
+      gameAnalyzerRef.current.analyzeGame(unanalyzedFens, {
+        targetDepth,
+        numLines: ANALYSIS_LINE_COUNT,
+        onProgress: (current) => {
+          setAnalysisProgress({
+            current: startIdx + current,
+            total: allFens.length,
+            depth: targetDepth
+          });
+        },
+        onPositionDone: (summary, relativeIndex) => {
+          const absoluteIndex = startIdx + relativeIndex;
+          gameAnalysisRef.current[absoluteIndex] = summary;
+          setGameAnalysis([...gameAnalysisRef.current]);
+        },
+        onDone: () => {
+          setAnalysisProgress(null);
+          setGameAnalysis([...gameAnalysisRef.current]);
+
+          if (gameId) {
+            socket.emit('save_game_analysis', {
+              id: gameId,
+              analysis: buildAnalysisPackage(gameAnalysisRef.current, targetDepth)
+            });
+          }
+
+          resolve(gameAnalysisRef.current);
+        }
+      });
+    });
+  };
+
+  const startPendingAutoAnalysis = () => {
+    if (autoAnalysisRunningRef.current || !pendingAutoAnalysisRef.current) return;
+
+    const nextRun = pendingAutoAnalysisRef.current;
+    pendingAutoAnalysisRef.current = null;
+    autoAnalysisRunningRef.current = true;
+
+    runAutoAnalysis(nextRun.targetBoard, nextRun.options).finally(() => {
+      autoAnalysisRunningRef.current = false;
+      if (pendingAutoAnalysisRef.current) {
+        startPendingAutoAnalysis();
+      }
+    });
+  };
+
+  const queueAutoAnalysis = (targetBoard, options = {}) => {
+    pendingAutoAnalysisRef.current = { targetBoard, options };
+    startPendingAutoAnalysis();
+  };
+
   useEffect(() => {
     socket.on('game_created', ({ code, color }) => {
+      resetAnalysisState();
+      setSavedGameId(null);
       window.history.pushState({}, '', '/?game=' + code);
       setRoomCode(code);
       setPlayerColor(color);
@@ -85,6 +302,8 @@ function App() {
     });
 
     socket.on('game_joined', ({ code, color }) => {
+      resetAnalysisState();
+      setSavedGameId(null);
       window.history.pushState({}, '', '/?game=' + code);
       setRoomCode(code);
       setPlayerColor(color);
@@ -105,15 +324,13 @@ function App() {
     });
 
     socket.on('spectator_joined', ({ code, history }) => {
+      resetAnalysisState();
+      setSavedGameId(null);
       setRoomCode(code);
       setPlayerColor('spectator');
-      const newBoard = new Board();
-      if (history && history.length > 0) {
-        newBoard.history = history;
-        newBoard.pieces = history[history.length - 1].pieces;
-        newBoard.turn = history.length % 2 === 1 ? 'white' : 'black';
-      }
+      const newBoard = createBoardFromHistory(history || []);
       setBoard(newBoard);
+      setHistoryIndex(-1);
       setView('SPECTATING');
     });
 
@@ -122,6 +339,8 @@ function App() {
     socket.on('waiting_count', (count) => setWaitingCount(count));
 
     socket.on('cpu_game_created', (code) => {
+      resetAnalysisState();
+      setSavedGameId(null);
       setRoomCode(code);
       setView('VS_CPU');
       window.history.pushState({}, '', '/?game=' + code);
@@ -175,6 +394,7 @@ function App() {
         window.history.pushState({}, '', '/');
         setView('LOBBY');
         setBoard(new Board());
+        resetAnalysisState();
       }
     });
 
@@ -280,102 +500,73 @@ function App() {
 
     if (spectateCode) {
       socket.emit('spectate_game', spectateCode);
-    } else if (analysisId && pastGames.length > 0) {
-      const gameToAnalyze = pastGames.find(g => g.id === parseInt(analysisId));
-      if (gameToAnalyze) {
-        setRoomCode(gameToAnalyze.room_code);
-        const reviewBoard = new Board();
-        const moves = JSON.parse(gameToAnalyze.moves);
-        reviewBoard.history = moves;
-
-        if (moves.length > 0) {
-          const lastSnap = moves[moves.length - 1];
-          reviewBoard.pieces = lastSnap.pieces;
-          reviewBoard.turn = moves.length % 2 === 1 ? 'black' : 'white';
-        }
-        reviewBoard.gameStatus = 'ended'; // Force ended status
-
-        setBoard(reviewBoard);
-        setHistoryIndex(-1);
-        setView('REVIEW');
-        setPendingAnalysisId(null);
-
-        if (gameToAnalyze.analysis) {
-          // Already have cached analysis! Use it immediately
-          setGameAnalysis(JSON.parse(gameToAnalyze.analysis));
-        } else if (!analyzerRef.current || !analyzerRef.current._isAnalyzing) {
-          // Start the auto analysis sequence
-          runAutoAnalysis(reviewBoard, gameToAnalyze.id);
-        }
-      }
-    }
-  }, [pastGames, pendingAnalysisId]);
-
-  const runAutoAnalysis = (finalBoard, gameId = null) => {
-    if (!analyzerRef.current) analyzerRef.current = new StockfishEngine();
-    const analyzer = analyzerRef.current;
-
-    // Generate FEN array for the whole game
-    const allFens = [];
-    const tmpBoard = new Board();
-
-    for (let i = 0; i < finalBoard.history.length; i++) {
-      const snap = finalBoard.history[i];
-      tmpBoard.pieces = snap.pieces;
-      tmpBoard.turn = (i % 2 === 0) ? 'white' : 'black';
-      tmpBoard.enPassantSquare = snap.enPassantSquare;
-      tmpBoard.halfMoveClock = snap.halfMoveClock;
-      allFens.push(tmpBoard.toFEN());
-    }
-
-    const cached = gameAnalysisRef.current;
-
-    // Clear cache if we switch to a different game or a completely new board
-    if (finalBoard.history.length === 0 || (cached.length > 0 && cached[0].fen !== allFens[0])) {
-      gameAnalysisRef.current = [];
-      setGameAnalysis([]);
-    }
-
-    const unanalyzedFens = allFens.slice(gameAnalysisRef.current.length);
-    if (unanalyzedFens.length === 0) {
-      setGameAnalysis([...gameAnalysisRef.current]);
       return;
     }
 
-    analyzer.analyzeGame(unanalyzedFens, 10, (current, total) => {
-      setAnalysisProgress({ current, total });
-    }, (results) => {
-      // Append new analysis to the ref
-      const startIdx = gameAnalysisRef.current.length;
-      results.forEach((r, i) => {
-        gameAnalysisRef.current.push({ ...r, moveIdx: startIdx + i });
-      });
+    if (!analysisId || pastGames.length === 0) {
+      return;
+    }
 
-      setGameAnalysis([...gameAnalysisRef.current]);
-      setAnalysisProgress(null);
+    const gameToAnalyze = pastGames.find(g => g.id === parseInt(analysisId, 10));
+    if (!gameToAnalyze) return;
 
-      // Save to server if we have a full game ID
-      if (gameId) {
-        socket.emit('save_game_analysis', { id: gameId, analysis: gameAnalysisRef.current });
-      }
+    const reviewRequestId = reviewLoadTokenRef.current + 1;
+    reviewLoadTokenRef.current = reviewRequestId;
 
-      // If new moves arrived while we were analyzing, they won't be in the cache. 
-      // The useEffect will trigger this again, but we can proactively trigger just in case:
-      if (board.history.length > finalBoard.history.length && view === 'SPECTATING') {
-        runAutoAnalysis(board);
-      }
+    resetAnalysisState();
+    setRoomCode(gameToAnalyze.room_code);
+    setSavedGameId(gameToAnalyze.id);
+
+    const moves = gameToAnalyze.moves ? JSON.parse(gameToAnalyze.moves) : [];
+    const reviewBoard = createBoardFromHistory(moves, { ended: true });
+    setBoard(reviewBoard);
+    setHistoryIndex(-1);
+    setPendingAnalysisId(null);
+
+    const cachedAnalysis = normalizeStoredAnalysis(
+      gameToAnalyze.analysis,
+      moves.length,
+      REVIEW_ANALYSIS_DEPTH
+    );
+
+    if (cachedAnalysis) {
+      analysisMetaRef.current = {
+        firstFen: cachedAnalysis[0]?.fen || buildFenList(moves)[0] || null,
+        depth: REVIEW_ANALYSIS_DEPTH
+      };
+      gameAnalysisRef.current = cachedAnalysis;
+      setGameAnalysis(cachedAnalysis);
+      setView('REVIEW');
+      return;
+    }
+
+    setAnalysisLoadingState({
+      roomCode: gameToAnalyze.room_code,
+      current: 0,
+      total: moves.length,
+      depth: REVIEW_ANALYSIS_DEPTH
     });
-  };
+    setView('ANALYZING');
+
+    runAutoAnalysis(reviewBoard, {
+      gameId: gameToAnalyze.id,
+      targetDepth: REVIEW_ANALYSIS_DEPTH
+    }).then((positions) => {
+      if (reviewLoadTokenRef.current !== reviewRequestId) return;
+      gameAnalysisRef.current = positions;
+      setGameAnalysis([...positions]);
+      setAnalysisLoadingState(null);
+      setView('REVIEW');
+    });
+  }, [pastGames, pendingAnalysisId]);
 
   // Live Spectator Analysis Trigger
   useEffect(() => {
     if (view === 'SPECTATING' && board.history.length > 0) {
-      runAutoAnalysis(board);
+      queueAutoAnalysis(board, { targetDepth: LIVE_ANALYSIS_DEPTH });
     }
   }, [board.history.length, view]);
 
-  const handleCreateGameLegacy = () => socket.emit('create_game');
-  const handleFindGameLegacy = () => socket.emit('find_game');
   const handleCancelFindGame = () => {
     socket.emit('cancel_find_game');
     setView('LOBBY');
@@ -389,6 +580,8 @@ function App() {
   };
 
   const handlePlayCPU = () => {
+    resetAnalysisState();
+    setSavedGameId(null);
     socket.emit('create_cpu_game');
     const newBoard = new Board();
     setBoard(newBoard);
@@ -654,6 +847,93 @@ function App() {
   const onDragEnd = () => {
     setDraggedPos(null);
   };
+
+  useEffect(() => {
+    return () => {
+      destroyEngine(stockfishRef);
+      destroyEngine(positionAnalyzerRef);
+      destroyEngine(gameAnalyzerRef);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (view !== 'ANALYZING' || !analysisProgress) return;
+
+    setAnalysisLoadingState((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        current: analysisProgress.current,
+        total: analysisProgress.total,
+        depth: analysisProgress.depth || prev.depth
+      };
+    });
+  }, [analysisProgress, view]);
+
+  useEffect(() => {
+    const fen = getViewedFEN();
+    if (!fen) {
+      setAnalysisLines([]);
+      return;
+    }
+
+    const storedEntry = getViewedAnalysisEntry();
+    if (storedEntry?.fen === fen && Array.isArray(storedEntry.topLines)) {
+      setAnalysisLines(storedEntry.topLines);
+      return;
+    }
+
+    if (analysisCache[fen]) {
+      setAnalysisLines(analysisCache[fen]);
+      return;
+    }
+
+    if (!isAnalyzing) {
+      setAnalysisLines([]);
+    }
+  }, [analysisCache, board, gameAnalysis, historyIndex, isAnalyzing, view]);
+
+  useEffect(() => {
+    if (view !== 'SPECTATING' || historyIndex !== -1 || board.history.length === 0) return;
+
+    const fen = getViewedFEN();
+    if (!fen) return;
+
+    const token = positionAnalysisTokenRef.current + 1;
+    positionAnalysisTokenRef.current = token;
+
+    if (!positionAnalyzerRef.current) {
+      positionAnalyzerRef.current = new StockfishEngine();
+    }
+
+    const analyzer = positionAnalyzerRef.current;
+    setIsAnalyzing(true);
+    if (analysisCache[fen]) {
+      setAnalysisLines(analysisCache[fen]);
+    } else {
+      setAnalysisLines([]);
+    }
+
+    analyzer.onAnalysisUpdate = (lines) => {
+      if (positionAnalysisTokenRef.current !== token) return;
+      setAnalysisLines([...lines]);
+    };
+
+    analyzer.onAnalysisDone = (lines) => {
+      if (positionAnalysisTokenRef.current !== token) return;
+      setAnalysisCache((prev) => ({ ...prev, [fen]: [...lines] }));
+      setAnalysisLines([...lines]);
+      setIsAnalyzing(false);
+    };
+
+    analyzer.analyzePosition(fen, ANALYSIS_LINE_COUNT, LIVE_ANALYSIS_DEPTH);
+
+    return () => {
+      if (positionAnalysisTokenRef.current === token) {
+        setIsAnalyzing(false);
+      }
+    };
+  }, [board, historyIndex, view]);
 
   const AnalysisArrows = () => {
     if (analysisLines.length === 0) return null;
@@ -939,6 +1219,45 @@ function App() {
     );
   }
 
+  if (view === 'ANALYZING') {
+    const totalPositions = analysisLoadingState?.total || 0;
+    const completedPositions = Math.min(analysisLoadingState?.current || 0, totalPositions);
+    const progressPercent = totalPositions > 0 ? (completedPositions / totalPositions) * 100 : 0;
+
+    return (
+      <div className="chess-container analysis-loading-view">
+        <h1>Analyzing Game</h1>
+        <p className="subtitle">
+          {analysisLoadingState?.roomCode
+            ? `Preparing cached review for ${analysisLoadingState.roomCode}`
+            : 'Preparing cached review'}
+        </p>
+
+        <div className="analysis-loading-card">
+          <div className="analysis-loading-spinner" />
+          <p className="loading-pulse">Running Stockfish through every position…</p>
+
+          <div className="analysis-progress-container analysis-loading-progress">
+            <div className="analysis-progress-bar" style={{ width: `${progressPercent}%` }} />
+          </div>
+
+          <div className="analysis-loading-meta">
+            <span>Depth {analysisLoadingState?.depth || REVIEW_ANALYSIS_DEPTH}</span>
+            <span>
+              {totalPositions > 0
+                ? `Position ${Math.min(completedPositions + 1, totalPositions)} / ${totalPositions}`
+                : 'Starting engine…'}
+            </span>
+          </div>
+
+          <p className="analysis-loading-note">
+            The finished move-by-move analysis is saved so the next viewer can open it instantly.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   // ──────── GAME / SPECTATING / VS_CPU VIEW ────────
   const boardRows = [];
   for (let r = 0; r < 8; r++) {
@@ -955,61 +1274,60 @@ function App() {
     }
     setSelectedPos(null);
     setLegalMoves([]);
-    // Stop current analysis when navigating
+    positionAnalysisTokenRef.current += 1;
     setIsAnalyzing(false);
-    setAnalysisLines([]);
-  };
-
-  // Analysis: compute FEN for the current position being viewed
-  const getViewedFEN = () => {
-    // Build a temporary board from the history snapshot
-    const snapshot = historyIndex === -1
-      ? board.history[board.history.length - 1]
-      : board.history[historyIndex];
-    if (!snapshot) return null;
-    const tmpBoard = new Board();
-    tmpBoard.pieces = snapshot.pieces;
-    const moveNum = historyIndex === -1 ? board.history.length - 1 : historyIndex;
-    tmpBoard.turn = moveNum % 2 === 0 ? 'white' : 'black';
-    return tmpBoard.toFEN();
   };
 
   const handleAnalyze = () => {
     const fen = getViewedFEN();
     if (!fen) return;
 
-    // Check cache first
-    if (analysisCache[fen]) {
-      setAnalysisLines(analysisCache[fen]);
+    const storedEntry = getViewedAnalysisEntry();
+    if (view === 'REVIEW' && storedEntry?.fen === fen && Array.isArray(storedEntry.topLines)) {
+      setAnalysisLines(storedEntry.topLines);
       setIsAnalyzing(false);
       return;
     }
 
-    // Start analysis
-    if (!analyzerRef.current) {
-      analyzerRef.current = new StockfishEngine();
+    if (analysisCache[fen]) {
+      setAnalysisLines(analysisCache[fen]);
     }
-    const analyzer = analyzerRef.current;
+
+    if (!positionAnalyzerRef.current) {
+      positionAnalyzerRef.current = new StockfishEngine();
+    }
+
+    const analyzer = positionAnalyzerRef.current;
+    const token = positionAnalysisTokenRef.current + 1;
+    positionAnalysisTokenRef.current = token;
+    const targetDepth = view === 'REVIEW' ? REVIEW_ANALYSIS_DEPTH : LIVE_ANALYSIS_DEPTH;
+
     setIsAnalyzing(true);
-    setAnalysisLines([]);
+    if (!analysisCache[fen]) {
+      setAnalysisLines([]);
+    }
 
     analyzer.onAnalysisUpdate = (lines) => {
+      if (positionAnalysisTokenRef.current !== token) return;
       setAnalysisLines([...lines]);
     };
     analyzer.onAnalysisDone = (lines) => {
+      if (positionAnalysisTokenRef.current !== token) return;
       setAnalysisLines([...lines]);
       setAnalysisCache(prev => ({ ...prev, [fen]: [...lines] }));
       setIsAnalyzing(false);
     };
 
-    // Small timeout to let the engine finish initialization if needed
-    setTimeout(() => analyzer.analyzePosition(fen, 5, 25), 100);
+    analyzer.analyzePosition(fen, ANALYSIS_LINE_COUNT, targetDepth);
   };
 
   const isSpectating = view === 'SPECTATING';
   const isVsCPU = view === 'VS_CPU';
   const isReview = view === 'REVIEW';
   const isMyTurn = board.turn === playerColor;
+  const currentAnalysisEntry = getViewedAnalysisEntry();
+  const currentBestMove = analysisLines[0]?.bestMove || analysisLines[0]?.moves?.[0] || currentAnalysisEntry?.bestMove || null;
+  const showAnalysisPanel = isReview || isVsCPU || isSpectating || historyIndex !== -1 || isAnalyzing || analysisLines.length > 0;
 
   const statusText = board.gameStatus === 'checkmate'
     ? `Checkmate! ${board.turn === 'white' ? 'Black' : 'White'} wins!`
@@ -1049,10 +1367,12 @@ function App() {
           <p>{isReview ? <b>Game Review</b> : isSpectating ? <b>Observer Mode</b> : isVsCPU ? <>You (White) vs <b>Stockfish</b></> : <>Playing as <b>{playerColor}</b></>}</p>
           <button className="btn-red" onClick={() => {
             if (isVsCPU) saveCpuGame(board);
-            setView('LOBBY'); setBoard(new Board());
-            if (stockfishRef.current) { stockfishRef.current.destroy(); stockfishRef.current = null; }
-            if (analyzerRef.current) { analyzerRef.current.destroy(); analyzerRef.current = null; }
-            setAnalysisLines([]); setIsAnalyzing(false);
+            destroyEngine(stockfishRef);
+            resetAnalysisState();
+            setSavedGameId(null);
+            setHistoryIndex(-1);
+            setView('LOBBY');
+            setBoard(new Board());
           }}>Leave</button>
         </div>
       </div>
@@ -1082,9 +1402,9 @@ function App() {
         {/* Analysis Progress Bar */}
         {analysisProgress && (
           <div className="analysis-progress-container" style={{ marginBottom: '12px', background: 'rgba(0,0,0,0.3)', borderRadius: '4px', overflow: 'hidden' }}>
-            <div style={{ height: '4px', width: `${(analysisProgress.current / analysisProgress.total) * 100}%`, background: 'var(--green)', transition: 'width 0.2s' }}></div>
+            <div style={{ height: '4px', width: `${analysisProgress.total > 0 ? ((analysisProgress.current + 1) / analysisProgress.total) * 100 : 0}%`, background: 'var(--green)', transition: 'width 0.2s' }}></div>
             <div style={{ fontSize: '10px', color: 'var(--text-muted)', textAlign: 'center', padding: '4px' }}>
-              Analyzing game {Math.min(analysisProgress.current + 1, analysisProgress.total)} / {analysisProgress.total}...
+              Analyzing game {Math.min(analysisProgress.current + 1, analysisProgress.total)} / {analysisProgress.total} at depth {analysisProgress.depth}...
             </div>
           </div>
         )}
@@ -1110,8 +1430,8 @@ function App() {
                 </div>
                 {analysis && idx > 0 && (
                   <div className="move-analysis" style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'flex', gap: '8px' }}>
-                    <span style={{ color: analysis.numericScore > 0 ? '#4ade80' : analysis.numericScore < -0 ? '#f87171' : '#9ca3af' }}>{analysis.score}</span>
-                    <span>Best: {analysis.bestMove}</span>
+                    <span style={{ color: analysis.numericScore > 0 ? '#4ade80' : analysis.numericScore < 0 ? '#f87171' : '#9ca3af' }}>{analysis.score}</span>
+                    <span>Best: {analysis.bestMove || 'None'}</span>
                   </div>
                 )}
               </div>
@@ -1123,7 +1443,7 @@ function App() {
         {(isReview || isVsCPU || isSpectating || historyIndex !== -1) && (
           <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
             <button className="btn-ghost" onClick={handleAnalyze} disabled={isAnalyzing} style={{ fontSize: '13px', padding: '8px' }}>
-              {isAnalyzing ? 'Analyzing Position…' : '🔍 Analyze This Position Here'}
+              {isAnalyzing ? 'Analyzing Position…' : '🔍 Refresh Top 5 Here'}
             </button>
             <button className="btn-blue"
               onClick={() => {
@@ -1141,16 +1461,27 @@ function App() {
         )}
 
         {/* Analysis results */}
-        {analysisLines.length > 0 && (
+        {showAnalysisPanel && (
           <div className="analysis-panel">
-            <h4>Engine Lines {isAnalyzing && <span className="loading-dot">●</span>}</h4>
-            {analysisLines.map((line, i) => (
+            <h4>Top 5 Engine Lines {isAnalyzing && <span className="loading-dot">●</span>}</h4>
+            {currentBestMove && (
+              <div className="analysis-summary">
+                <span>Best move</span>
+                <strong>{currentBestMove}</strong>
+              </div>
+            )}
+            {analysisLines.length > 0 ? analysisLines.map((line, i) => (
               <div key={i} className="analysis-line">
+                <span className="analysis-rank">#{i + 1}</span>
                 <span className="analysis-score">{line.score}</span>
                 <span className="analysis-moves">{line.moves.join(' ')}</span>
                 <span className="analysis-depth">d{line.depth}</span>
               </div>
-            ))}
+            )) : (
+              <div className="analysis-empty">
+                {isAnalyzing ? 'Calculating top moves for this position…' : 'No legal moves available from this position.'}
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -340,6 +340,28 @@ input[type="range"],
   gap: 6px;
 }
 
+.analysis-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(74, 222, 128, 0.08);
+  border: 1px solid rgba(74, 222, 128, 0.16);
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.analysis-summary strong {
+  color: var(--green);
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
 .analysis-line {
   display: flex;
   align-items: center;
@@ -353,6 +375,11 @@ input[type="range"],
 
 .analysis-line:hover {
   background: rgba(255, 255, 255, 0.05);
+}
+
+.analysis-rank {
+  min-width: 24px;
+  color: rgba(255, 255, 255, 0.35);
 }
 
 .analysis-score {
@@ -373,6 +400,80 @@ input[type="range"],
 .analysis-depth {
   color: rgba(255, 255, 255, 0.3);
   font-size: 10px;
+}
+
+.analysis-empty {
+  padding: 10px 6px 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.analysis-progress-bar {
+  height: 4px;
+  background: var(--green);
+  transition: width 0.2s;
+}
+
+@keyframes analysis-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.analysis-loading-view {
+  max-width: 640px;
+}
+
+.analysis-loading-card {
+  width: 100%;
+  padding: 28px 24px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background:
+    radial-gradient(circle at top, rgba(34, 197, 94, 0.18), transparent 55%),
+    rgba(0, 0, 0, 0.3);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.analysis-loading-spinner {
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, 0.12);
+  border-top-color: var(--green);
+  animation: analysis-spin 1s linear infinite;
+}
+
+.analysis-loading-progress {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.analysis-loading-meta {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.analysis-loading-note {
+  margin: 0;
+  max-width: 420px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 @keyframes blink-dot {

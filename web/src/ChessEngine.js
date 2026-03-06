@@ -222,6 +222,18 @@ export class Board {
         piece.position = position;
     }
 
+    createSnapshot(moveText) {
+        return {
+            move: moveText,
+            pieces: this.clonePieces(),
+            turn: this.turn,
+            enPassantSquare: this.enPassantSquare,
+            halfMoveClock: this.halfMoveClock,
+            fullMoveNumber: this.fullMoveNumber,
+            gameStatus: this.gameStatus
+        };
+    }
+
     // Check if a square is attacked by attackerColor
     isSquareAttacked(square, attackerColor) {
         for (const piece of Object.values(this.pieces)) {
@@ -426,10 +438,7 @@ export class Board {
         }
 
         // Save to history
-        this.history.push({
-            move: moveText,
-            pieces: this.clonePieces()
-        });
+        this.history.push(this.createSnapshot(moveText));
 
         return true;
     }
@@ -528,9 +537,6 @@ export class Board {
         setupRow('white', 1);
         setupRow('black', 8);
 
-        this.history.push({
-            move: 'Start',
-            pieces: this.clonePieces()
-        });
+        this.history.push(this.createSnapshot('Start'));
     }
 }
