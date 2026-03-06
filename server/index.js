@@ -337,8 +337,9 @@ io.on('connection', (socket) => {
         if (!opponentSocketId) return;
 
         room.drawOffer = { fromSocketId: socket.id, color };
-        io.to(socket.id).emit('draw_offer_sent');
+        io.to(socket.id).emit('draw_offer_sent', { code });
         io.to(opponentSocketId).emit('draw_offer_received', {
+            code,
             fromColor: color,
             fromName: getProfileName(room.profiles?.[color], color === 'white' ? 'White' : 'Black')
         });
