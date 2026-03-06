@@ -71,9 +71,9 @@ function App() {
   // User Profile
   const [userProfile, setUserProfile] = useState(() => {
     const saved = localStorage.getItem('chess_profile');
-    return saved ? JSON.parse(saved) : { name: '', cyberNumber: '' };
+    return saved ? JSON.parse(saved) : { name: '' };
   });
-  const [tempProfile, setTempProfile] = useState({ name: '', cyberNumber: '' });
+  const [tempProfile, setTempProfile] = useState({ name: '' });
   const [profileError, setProfileError] = useState('');
 
   useEffect(() => {
@@ -476,13 +476,12 @@ function App() {
   };
 
   const saveProfile = () => {
-    if (!tempProfile.name.trim() || !tempProfile.cyberNumber.trim()) {
-      setProfileError('Incomplete Protocol. Fill all fields.');
+    if (!tempProfile.name.trim()) {
+      setProfileError('Identification required.');
       return;
     }
     const profile = {
-      name: tempProfile.name.trim(),
-      cyberNumber: tempProfile.cyberNumber.trim()
+      name: tempProfile.name.trim()
     };
     localStorage.setItem('chess_profile', JSON.stringify(profile));
     setUserProfile(profile);
@@ -492,7 +491,7 @@ function App() {
     <div className="identity-overlay">
       <div className="identity-modal">
         <h2>Identity Setup</h2>
-        <p>Your signature is required to access the neural chess network. Please provide your handle and identification number.</p>
+        <p>Your handle is required to access the neural chess network.</p>
         <div className="identity-form">
           <div className="input-block">
             <label>Shadow Handle</label>
@@ -501,20 +500,10 @@ function App() {
               className="cyber-input"
               placeholder="e.g. ZeroCool"
               value={tempProfile.name}
-              onChange={e => setTempProfile(prev => ({ ...prev, name: e.target.value }))}
+              onChange={e => setTempProfile({ name: e.target.value })}
             />
           </div>
-          <div className="input-block">
-            <label>Cyber Number</label>
-            <input
-              type="text"
-              className="cyber-input"
-              placeholder="e.g. 7749-X"
-              value={tempProfile.cyberNumber}
-              onChange={e => setTempProfile(prev => ({ ...prev, cyberNumber: e.target.value }))}
-            />
-          </div>
-          <button className="btn-cyber" onClick={saveProfile}>
+          <button className="btn-cyber" style={{ marginTop: '10px' }} onClick={saveProfile}>
             Authorize Access
           </button>
           {profileError && <div className="cyber-status">{profileError}</div>}
@@ -811,7 +800,7 @@ function App() {
     );
   };
 
-  if (!userProfile.name || !userProfile.cyberNumber) {
+  if (!userProfile.name) {
     return (
       <div id="app-root">
         <IdentityModal />
