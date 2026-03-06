@@ -1,0 +1,146 @@
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+const cors = require('cors');
+
+const app = express();
+app.use(cors());
+const server = http.createServer(app);
+
+const io = new Server(server, {
+    cors: {
+        origin: "*", // Allow Vite local dev
+        methods: ["GET", "POST"]
+    }
+});
+
+// Store active rooms
+const rooms = new Map();
+
+// Matchmaking waiting queue (stores socket.id)
+let waitingPlayer = null;
+
+function generateRoomCode() {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let code = '';
+    for (let i = 0; i < 3; i++) {
+        code += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return code;
+}
+
+io.on('connection', (socket) => {
+    console.log('User connected:', socket.id);
+
+    socket.on('create_game', () => {
+        let code = generateRoomCode();
+        while (rooms.has(code)) {
+            code = generateRoomCode();
+        }
+
+        // Store room with the creator as white
+        rooms.set(code, {
+            players: { [socket.id]: 'white' },
+            full: false
+        });
+
+        socket.join(code);
+        socket.emit('game_created', { code, color: 'white' });
+        console.log(`Room ${code} created by ${socket.id} (white)`);
+    });
+
+    socket.on('join_game', (code) => {
+        code = code.toUpperCase();
+        const room = rooms.get(code);
+
+        if (!room) {
+            socket.emit('join_error', 'Invalid room code.');
+            return;
+        }
+
+        if (room.full) {
+            socket.emit('join_error', 'Room is already full.');
+            return;
+        }
+
+        // Assign black to the second player
+        room.players[socket.id] = 'black';
+        room.full = true;
+        rooms.set(code, room);
+
+        socket.join(code);
+        socket.emit('game_joined', { code, color: 'black' });
+        console.log(`User ${socket.id} joined room ${code} (black)`);
+
+        // Notify the room that game can start
+        io.to(code).emit('game_start', { message: 'Opponent joined. White to move.' });
+    });
+
+    socket.on('find_game', () => {
+        // If there is no one waiting, or if the current socket is the one waiting (prevent double-click bug)
+        if (!waitingPlayer || waitingPlayer.id === socket.id) {
+            let code = generateRoomCode();
+            while (rooms.has(code)) {
+                code = generateRoomCode();
+            }
+
+            rooms.set(code, {
+                players: { [socket.id]: 'white' },
+                full: false
+            });
+
+            waitingPlayer = { id: socket.id, code: code };
+            socket.join(code);
+            socket.emit('game_created', { code, color: 'white' });
+            socket.emit('waiting_for_match'); // Custom event for the new UI state
+            console.log(`User ${socket.id} is waiting for a match (Room ${code})`);
+        } else {
+            // Someone is waiting! Join their room
+            const code = waitingPlayer.code;
+            const room = rooms.get(code);
+
+            if (room) {
+                room.players[socket.id] = 'black';
+                room.full = true;
+                rooms.set(code, room);
+
+                socket.join(code);
+                socket.emit('game_joined', { code, color: 'black' });
+                console.log(`User ${socket.id} joined waiting player in room ${code} (black)`);
+
+                // Notify both players the match found!
+                io.to(code).emit('game_start', { message: 'Match found! White to move.' });
+            }
+            // Reset waiting queue
+            waitingPlayer = null;
+        }
+    });
+
+    socket.on('make_move', ({ code, startPos, endPos }) => {
+        // Broadcast the move to the OTHER player in the room
+        socket.to(code).emit('opponent_move', { startPos, endPos });
+    });
+
+    socket.on('disconnect', () => {
+        console.log('User disconnected:', socket.id);
+
+        // Remove from waiting queue if they disconnect
+        if (waitingPlayer && waitingPlayer.id === socket.id) {
+            rooms.delete(waitingPlayer.code);
+            waitingPlayer = null;
+        }
+
+        // Notify rooms the user was in
+        rooms.forEach((roomData, code) => {
+            if (roomData.players[socket.id]) {
+                io.to(code).emit('opponent_disconnected');
+                rooms.delete(code); // Simple cleanup
+            }
+        });
+    });
+});
+
+const PORT = 3001;
+server.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+});

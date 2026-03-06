@@ -1,0 +1,12 @@
+node_modules/
+.env
+dist/
+build/
+.DS_Store
+
+# Vite output
+web/dist/
+web/node_modules/
+
+# Server
+server/node_modules/
