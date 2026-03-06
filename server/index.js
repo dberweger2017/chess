@@ -118,6 +118,15 @@ io.on('connection', (socket) => {
         }
     });
 
+    socket.on('cancel_find_game', () => {
+        if (waitingPlayer && waitingPlayer.id === socket.id) {
+            rooms.delete(waitingPlayer.code);
+            socket.leave(waitingPlayer.code);
+            waitingPlayer = null;
+            console.log(`User ${socket.id} cancelled matchmaking.`);
+        }
+    });
+
     socket.on('make_move', ({ code, startPos, endPos, newHistoryItem }) => {
         // Broadcast the move to the OTHER player in the room (and spectators)
         socket.to(code).emit('opponent_move', { startPos, endPos });

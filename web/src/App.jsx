@@ -32,6 +32,7 @@ function App() {
   const [board, setBoard] = useState(new Board());
   const [selectedPos, setSelectedPos] = useState(null);
   const [legalMoves, setLegalMoves] = useState([]);
+  const [preMove, setPreMove] = useState(null); // { startPos, endPos }
   const [historyIndex, setHistoryIndex] = useState(-1);
   const stockfishRef = useRef(null);
   const [cpuThinking, setCpuThinking] = useState(false);
@@ -109,7 +110,27 @@ function App() {
         b.halfMoveClock = prevBoard.halfMoveClock;
         b.fullMoveNumber = prevBoard.fullMoveNumber;
         b.gameStatus = prevBoard.gameStatus;
+
+        // Apply the opponent's move first
         b.movePiece(startPos, endPos);
+
+        // Then check if it's my turn now and I have a pre-move queued
+        if (b.turn === playerColor && preMove) {
+          // Validate pre-move against new board state
+          const pMoves = b.getLegalMovesForPiece(preMove.startPos);
+          if (pMoves.includes(preMove.endPos)) {
+            b.movePiece(preMove.startPos, preMove.endPos);
+            socket.emit('make_move', {
+              code: roomCode,
+              startPos: preMove.startPos,
+              endPos: preMove.endPos,
+              newHistoryItem: b.history[b.history.length - 1]
+            });
+          }
+          // Clear pre-move whether valid or not
+          setPreMove(null);
+        }
+
         return b;
       });
       setHistoryIndex(-1);
@@ -144,6 +165,10 @@ function App() {
 
   const handleCreateGame = () => socket.emit('create_game');
   const handleFindGame = () => socket.emit('find_game');
+  const handleCancelFindGame = () => {
+    socket.emit('cancel_find_game');
+    setView('LOBBY');
+  };
 
   // Helper to save CPU game to DB
   const saveCpuGame = (b) => {
@@ -182,6 +207,25 @@ function App() {
         // Record stats for this move index
         const moveIdx = b.history.length - 1;
         setEngineStats(prev => ({ ...prev, [moveIdx]: stats }));
+
+        // Execute pre-move if present and valid
+        if (preMove) {
+          const pMoves = b.getLegalMovesForPiece(preMove.startPos);
+          if (pMoves.includes(preMove.endPos)) {
+            b.movePiece(preMove.startPos, preMove.endPos);
+            // Trigger the engine's next move after our pre-move
+            setTimeout(() => {
+              stockfishRef.current?.getBestMove(b.toFEN());
+            }, 200);
+          } else {
+            // Pre-move was invalid, it's just our turn now
+            setCpuThinking(false);
+          }
+          setPreMove(null);
+        } else {
+          setCpuThinking(false);
+        }
+
         return b;
       });
       setCpuThinking(false);
@@ -201,9 +245,48 @@ function App() {
     if (view !== 'GAME' && !isVsCPU) return;
     if (historyIndex !== -1) return;
     if (playerColor === 'spectator') return;
-    if (board.turn !== playerColor) return;
     if (board.gameStatus !== 'active') return;
-    if (cpuThinking) return;
+
+    // --- Opponent's Turn: Handle Pre-moves ---
+    if (board.turn !== playerColor) {
+      if (cpuThinking) return;
+
+      // If clicking outside, cancel pre-move and selection
+      if (preMove) {
+        setPreMove(null);
+        setSelectedPos(null);
+        setLegalMoves([]);
+        return;
+      }
+
+      const piece = board.pieces[pos];
+      if (selectedPos) {
+        // Only allow "pseudo-legal" moves for pre-moves since board state will change
+        // For simplicity, we just check if it's a generally valid move for that piece on the CURRENT board.
+        // It gets validated properly when the turn arrives.
+        if (legalMoves.includes(pos)) {
+          setPreMove({ startPos: selectedPos, endPos: pos });
+          setSelectedPos(null);
+          setLegalMoves([]);
+        } else if (piece && piece.color === playerColor) {
+          // Switch pre-move piece selection
+          setSelectedPos(pos);
+          setLegalMoves(board.getLegalMovesForPiece(pos));
+        } else {
+          // Cancel selection
+          setSelectedPos(null);
+          setLegalMoves([]);
+        }
+      } else if (piece && piece.color === playerColor) {
+        setSelectedPos(pos);
+        setLegalMoves(board.getLegalMovesForPiece(pos));
+      }
+      return;
+    }
+
+    // --- My Turn ---
+    // If I had a pre-move queued somehow, cancel it
+    if (preMove) setPreMove(null);
 
     if (selectedPos) {
       if (legalMoves.includes(pos)) {
@@ -444,6 +527,7 @@ function App() {
         <p className="subtitle">Looking for an opponent…</p>
         <div className="search-icon">♟</div>
         <p className="loading-pulse">Searching…</p>
+        <button className="btn-red" onClick={handleCancelFindGame} style={{ marginTop: '20px' }}>Cancel Search</button>
       </div>
     );
   }
