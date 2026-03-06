@@ -65,16 +65,19 @@ function App() {
   const [liveGames, setLiveGames] = useState([]);
   const [pastGames, setPastGames] = useState([]);
   const [pendingAnalysisId, setPendingAnalysisId] = useState(null);
+  const [savedGameId, setSavedGameId] = useState(null);
   const [waitingCount, setWaitingCount] = useState(0);
 
   useEffect(() => {
     socket.on('game_created', ({ code, color }) => {
+      window.history.pushState({}, '', '/?game=' + code);
       setRoomCode(code);
       setPlayerColor(color);
       setView('WAITING');
     });
 
     socket.on('game_joined', ({ code, color }) => {
+      window.history.pushState({}, '', '/?game=' + code);
       setRoomCode(code);
       setPlayerColor(color);
       setView('GAME');
@@ -147,14 +150,21 @@ function App() {
     });
 
     socket.on('opponent_disconnected', () => {
-      alert("Opponent disconnected!");
-      setView('LOBBY');
-      setBoard(new Board());
+      // If the game was already over, just let them review the board.
+      // Otherwise notify them it ended abruptly.
+      if (document.querySelector('.status-bar')?.textContent?.includes('Checkmate') ||
+        document.querySelector('.status-bar')?.textContent?.includes('Stalemate')) {
+        console.log("Opponent left finished game.");
+      } else {
+        alert("Opponent disconnected!");
+        window.history.pushState({}, '', '/');
+        setView('LOBBY');
+        setBoard(new Board());
+      }
     });
 
     socket.on('game_saved', (id) => {
-      window.history.pushState({}, '', '/?analysis=' + id);
-      setPendingAnalysisId(id);
+      setSavedGameId(id);
       socket.emit('get_past_games'); // Refresh games list so we can load it
     });
 
@@ -176,9 +186,18 @@ function App() {
 
   useEffect(() => {
     if (view === 'LOBBY') {
+      window.history.pushState({}, '', '/');
       socket.emit('get_live_games');
       socket.emit('get_past_games');
       socket.emit('get_waiting_count');
+
+      // Auto-join from URL if specified
+      const urlParams = new URLSearchParams(window.location.search);
+      const gameCode = urlParams.get('game');
+      if (gameCode && joinCodeInput !== gameCode) {
+        setJoinCodeInput(gameCode);
+        socket.emit('join_game', gameCode.toUpperCase());
+      }
     }
   }, [view]);
 
@@ -721,18 +740,7 @@ function App() {
                   const moves = game.moves ? JSON.parse(game.moves) : [];
                   const moveCount = Math.max(0, moves.length - 1);
                   return (
-                    <div key={game.id} className="list-item" onClick={() => {
-                      if (analyzerRef.current) analyzerRef.current.stopAnalysis();
-                      setGameAnalysis([]);
-                      setAnalysisProgress(null);
-
-                      // Trigger URL navigation which the useEffect picks up
-                      window.history.pushState({}, '', '/?analysis=' + game.id);
-                      setPendingAnalysisId(game.id);
-                      setView('REVIEW');
-                      setAnalysisLines([]);
-                      setIsAnalyzing(false);
-                    }}>
+                    <div key={game.id} className="list-item" onClick={() => window.open(`/?analysis=${game.id}`, '_blank')}>
                       <span>{game.room_code} · {moveCount} moves</span>
                       <span className="badge">{(new Date(game.ended_at)).toLocaleDateString()}</span>
                     </div>
@@ -952,9 +960,20 @@ function App() {
 
         {/* Analysis button — show in review mode, or when viewing history in any game */}
         {(isReview || isVsCPU || isSpectating || historyIndex !== -1) && (
-          <div style={{ marginTop: '12px' }}>
+          <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
             <button className="btn-ghost" onClick={handleAnalyze} disabled={isAnalyzing} style={{ fontSize: '13px', padding: '8px' }}>
-              {isAnalyzing ? 'Analyzing…' : '🔍 Analyze Position'}
+              {isAnalyzing ? 'Analyzing Position…' : '🔍 Analyze This Position Here'}
+            </button>
+            <button className="btn-blue"
+              onClick={() => {
+                if (savedGameId) {
+                  window.open('/?analysis=' + savedGameId, '_blank');
+                } else {
+                  window.open('/?spectate=' + roomCode, '_blank');
+                }
+              }}
+              style={{ fontSize: '13px', padding: '8px' }}>
+              📊 Analyze Full Game in New Tab
             </button>
           </div>
         )}
