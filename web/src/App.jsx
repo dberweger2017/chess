@@ -50,6 +50,7 @@ function App() {
 
   // Auto Game Analysis
   const [gameAnalysis, setGameAnalysis] = useState([]); // Array of analysis results
+  const gameAnalysisRef = useRef([]); // Persistent cache for incremental analysis
   const [analysisProgress, setAnalysisProgress] = useState(null); // { current, total }
 
   // Multiplayer states
@@ -180,8 +181,11 @@ function App() {
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const analysisId = urlParams.get('analysis') || pendingAnalysisId;
+    const spectateCode = urlParams.get('spectate');
 
-    if (analysisId && pastGames.length > 0) {
+    if (spectateCode) {
+      socket.emit('spectate_game', spectateCode);
+    } else if (analysisId && pastGames.length > 0) {
       const gameToAnalyze = pastGames.find(g => g.id === parseInt(analysisId));
       if (gameToAnalyze) {
         setRoomCode(gameToAnalyze.room_code);
@@ -217,7 +221,7 @@ function App() {
     const analyzer = analyzerRef.current;
 
     // Generate FEN array for the whole game
-    const fens = [];
+    const allFens = [];
     const tmpBoard = new Board();
 
     for (let i = 0; i < finalBoard.history.length; i++) {
@@ -226,25 +230,54 @@ function App() {
       tmpBoard.turn = (i % 2 === 0) ? 'white' : 'black';
       tmpBoard.enPassantSquare = snap.enPassantSquare;
       tmpBoard.halfMoveClock = snap.halfMoveClock;
-      fens.push(tmpBoard.toFEN());
+      allFens.push(tmpBoard.toFEN());
     }
 
-    setGameAnalysis([]);
-    setAnalysisProgress({ current: 0, total: fens.length });
+    const cached = gameAnalysisRef.current;
 
-    analyzer.analyzeGame(fens, 10, (current, total) => {
+    // Clear cache if we switch to a different game or a completely new board
+    if (finalBoard.history.length === 0 || (cached.length > 0 && cached[0].fen !== allFens[0])) {
+      gameAnalysisRef.current = [];
+      setGameAnalysis([]);
+    }
+
+    const unanalyzedFens = allFens.slice(gameAnalysisRef.current.length);
+    if (unanalyzedFens.length === 0) {
+      setGameAnalysis([...gameAnalysisRef.current]);
+      return;
+    }
+
+    analyzer.analyzeGame(unanalyzedFens, 10, (current, total) => {
       setAnalysisProgress({ current, total });
     }, (results) => {
-      // Add moveIdx to results for the chart
-      const chartData = results.map((r, i) => ({ ...r, moveIdx: i }));
-      setGameAnalysis(chartData);
+      // Append new analysis to the ref
+      const startIdx = gameAnalysisRef.current.length;
+      results.forEach((r, i) => {
+        gameAnalysisRef.current.push({ ...r, moveIdx: startIdx + i });
+      });
+
+      setGameAnalysis([...gameAnalysisRef.current]);
       setAnalysisProgress(null);
 
+      // Save to server if we have a full game ID
       if (gameId) {
-        socket.emit('save_game_analysis', { id: gameId, analysis: chartData });
+        socket.emit('save_game_analysis', { id: gameId, analysis: gameAnalysisRef.current });
+      }
+
+      // If new moves arrived while we were analyzing, they won't be in the cache. 
+      // The useEffect will trigger this again, but we can proactively trigger just in case:
+      if (board.history.length > finalBoard.history.length && view === 'SPECTATING') {
+        runAutoAnalysis(board);
       }
     });
   };
+
+  // Live Spectator Analysis Trigger
+  useEffect(() => {
+    if (view === 'SPECTATING' && board.history.length > 0) {
+      runAutoAnalysis(board);
+    }
+  }, [board.history.length, view]);
 
   const handleCreateGame = () => socket.emit('create_game');
   const handleFindGame = () => socket.emit('find_game');
@@ -547,7 +580,7 @@ function App() {
             <div className="item-list">
               {liveGames.length === 0 ? <p className="empty-msg">No active games right now</p> :
                 liveGames.map(game => (
-                  <div key={game.code} className="list-item" onClick={() => socket.emit('spectate_game', game.code)}>
+                  <div key={game.code} className="list-item" onClick={() => window.open(`/?spectate=${game.code}`, '_blank')}>
                     <span>Room {game.code}</span>
                     <span className="badge">{game.moves} moves</span>
                   </div>
