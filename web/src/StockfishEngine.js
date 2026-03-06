@@ -125,6 +125,82 @@ export class StockfishEngine {
         this.worker.postMessage(`go depth ${maxDepth}`);
     }
 
+    analyzeGame(fens, targetDepth = 17, onProgress, onDone) {
+        if (!this.ready || fens.length === 0) {
+            if (onDone) onDone([]);
+            return;
+        }
+
+        this.worker.postMessage('stop');
+        this.worker.postMessage('setoption name MultiPV value 1');
+
+        let currentIndex = 0;
+        const results = [];
+
+        // We will repurpose the internal message handler temporarily
+        const originalOnMessage = this.worker.onmessage;
+
+        let currentDepth = 0;
+        let currentScore = 0;
+        let pScoreType = 'cp';
+
+        const processNext = () => {
+            if (currentIndex >= fens.length) {
+                this.worker.onmessage = originalOnMessage;
+                if (onDone) onDone(results);
+                return;
+            }
+            if (onProgress) onProgress(currentIndex, fens.length);
+
+            this.worker.postMessage(`position fen ${fens[currentIndex]}`);
+            this.worker.postMessage(`go depth ${targetDepth}`);
+        };
+
+        this.worker.onmessage = (e) => {
+            const line = typeof e.data === 'string' ? e.data : e.data?.data;
+            if (!line) return;
+
+            if (line.startsWith('info') && line.includes('depth')) {
+                const depthMatch = line.match(/\bdepth (\d+)/);
+                const scoreMatch = line.match(/\bscore (cp|mate) (-?\d+)/);
+
+                if (depthMatch) currentDepth = parseInt(depthMatch[1]);
+                if (scoreMatch) {
+                    pScoreType = scoreMatch[1];
+                    currentScore = parseInt(scoreMatch[2]);
+                }
+            }
+
+            if (line.startsWith('bestmove')) {
+                const parts = line.split(' ');
+                const bestMove = parts[1];
+
+                let numericScore = 0;
+                let formattedScore = '';
+
+                if (pScoreType === 'mate') {
+                    numericScore = currentScore > 0 ? 1000 : -1000;
+                    formattedScore = `M${currentScore}`;
+                } else {
+                    numericScore = currentScore / 100;
+                    formattedScore = numericScore.toFixed(2);
+                }
+
+                results.push({
+                    fen: fens[currentIndex],
+                    bestMove,
+                    score: formattedScore,
+                    numericScore
+                });
+
+                currentIndex++;
+                processNext();
+            }
+        };
+
+        processNext();
+    }
+
     stopAnalysis() {
         this.worker.postMessage('stop');
     }
