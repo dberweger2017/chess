@@ -25,6 +25,19 @@ function broadcastWaitingCount() {
     io.emit('waiting_count', waitingPlayer ? 1 : 0);
 }
 
+function broadcastLiveGames() {
+    const liveGames = [];
+    rooms.forEach((roomData, code) => {
+        if (roomData.full) {
+            liveGames.push({ code, moves: roomData.history.length });
+        }
+    });
+    io.emit('live_games_list', liveGames);
+}
+
+// Optional periodic refresh
+setInterval(broadcastLiveGames, 5000);
+
 function generateRoomCode() {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     let code = '';
@@ -69,6 +82,7 @@ io.on('connection', (socket) => {
 
         socket.join(code);
         socket.emit('cpu_game_created', code);
+        broadcastLiveGames();
         console.log(`User ${socket.id} started CPU game (Room ${code})`);
     });
 
@@ -93,6 +107,7 @@ io.on('connection', (socket) => {
 
         socket.join(code);
         socket.emit('game_joined', { code, color: 'black' });
+        broadcastLiveGames();
         console.log(`User ${socket.id} joined room ${code} (black)`);
 
         // Notify the room that game can start
@@ -135,6 +150,7 @@ io.on('connection', (socket) => {
 
                 // Notify both players the match found!
                 io.to(code).emit('game_start', { message: 'Match found! White to move.' });
+                broadcastLiveGames();
             }
             // Reset waiting queue
             waitingPlayer = null;
@@ -160,6 +176,7 @@ io.on('connection', (socket) => {
         const room = rooms.get(code);
         if (room && newHistoryItem) {
             room.history.push(newHistoryItem);
+            broadcastLiveGames(); // Update move count in lobby
         }
     });
 
@@ -238,6 +255,7 @@ io.on('connection', (socket) => {
                 }
 
                 rooms.delete(code);
+                broadcastLiveGames();
             }
         });
     });
