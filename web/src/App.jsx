@@ -191,7 +191,17 @@ function App() {
           if (!isVsCPU) {
             socket.emit('make_move', { code: roomCode, startPos: selectedPos, endPos: pos, newHistoryItem });
           }
-          const updatedBoard = Object.assign(Object.create(Object.getPrototypeOf(board)), board);
+
+          // Create a proper deep clone for React state
+          const updatedBoard = new Board();
+          updatedBoard.pieces = board.clonePieces();
+          updatedBoard.turn = board.turn;
+          updatedBoard.history = [...board.history];
+          updatedBoard.enPassantSquare = board.enPassantSquare;
+          updatedBoard.halfMoveClock = board.halfMoveClock;
+          updatedBoard.fullMoveNumber = board.fullMoveNumber;
+          updatedBoard.gameStatus = board.gameStatus;
+
           setBoard(updatedBoard);
           setSelectedPos(null);
           setLegalMoves([]);
@@ -200,9 +210,9 @@ function App() {
           // If vs CPU, ask Stockfish
           if (isVsCPU && updatedBoard.gameStatus === 'active') {
             setCpuThinking(true);
-            // Small delay so the UI updates first
+            const fen = board.toFEN();
             setTimeout(() => {
-              stockfishRef.current?.getBestMove(updatedBoard.toFEN());
+              stockfishRef.current?.getBestMove(fen);
             }, 200);
           }
           return;
