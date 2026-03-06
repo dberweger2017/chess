@@ -925,3 +925,155 @@ input[type="range"],
     --sq: 50px;
   }
 }
+
+/* =========================================
+   IDENTITY MODAL (CYBERPUNK)
+   ========================================= */
+
+.identity-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(10, 10, 20, 0.9);
+  backdrop-filter: blur(25px);
+  -webkit-backdrop-filter: blur(25px);
+  z-index: 10000;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  animation: fadeIn 0.4s ease-out;
+}
+
+.identity-modal {
+  width: 90%;
+  max-width: 450px;
+  background: rgba(26, 26, 46, 0.85);
+  border: 1px solid rgba(0, 242, 255, 0.2);
+  border-radius: 24px;
+  padding: 45px;
+  text-align: center;
+  box-shadow: 0 0 60px rgba(0, 0, 0, 0.6),
+    0 0 30px rgba(0, 242, 255, 0.08),
+    inset 0 0 20px rgba(255, 255, 255, 0.02);
+  position: relative;
+  overflow: hidden;
+}
+
+.identity-modal::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #00f2ff, transparent);
+  animation: scanning 4s linear infinite;
+}
+
+@keyframes scanning {
+  0% {
+    transform: translateX(-100%);
+  }
+
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.identity-modal h2 {
+  font-size: 30px;
+  margin-bottom: 12px;
+  text-transform: uppercase;
+  letter-spacing: 3px;
+  color: #00f2ff;
+  text-shadow: 0 0 15px rgba(0, 242, 255, 0.5);
+  font-weight: 800;
+}
+
+.identity-modal p {
+  color: #94a3b8;
+  font-size: 14px;
+  margin-bottom: 35px;
+  line-height: 1.6;
+}
+
+.identity-form {
+  display: flex;
+  flex-direction: column;
+  gap: 25px;
+}
+
+.input-block {
+  text-align: left;
+}
+
+.input-block label {
+  display: block;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  color: #64748b;
+  margin-bottom: 10px;
+  margin-left: 4px;
+  font-weight: 700;
+}
+
+.cyber-input {
+  width: 100%;
+  background: rgba(0, 0, 0, 0.5) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  padding: 16px 20px !important;
+  font-size: 16px !important;
+  font-family: 'JetBrains Mono', monospace !important;
+  text-align: left !important;
+  letter-spacing: 1px !important;
+  text-transform: none !important;
+  border-radius: 14px !important;
+  transition: all 0.3s ease !important;
+  color: white !important;
+  outline: none !important;
+}
+
+.cyber-input:focus {
+  border-color: #00f2ff !important;
+  box-shadow: 0 0 20px rgba(0, 242, 255, 0.25);
+  background: rgba(0, 0, 0, 0.7) !important;
+}
+
+.btn-cyber {
+  margin-top: 15px;
+  background: linear-gradient(135deg, #00d2ff 0%, #3a7bd5 100%) !important;
+  color: white !important;
+  padding: 18px !important;
+  font-size: 16px !important;
+  font-weight: 800 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 3px !important;
+  border-radius: 14px !important;
+  box-shadow: 0 6px 25px rgba(58, 123, 213, 0.45) !important;
+  cursor: pointer !important;
+  transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) !important;
+  border: none !important;
+}
+
+.btn-cyber:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 10px 35px rgba(58, 123, 213, 0.65) !important;
+  filter: brightness(1.15);
+}
+
+.btn-cyber:active {
+  transform: translateY(0);
+}
+
+.cyber-status {
+  font-size: 10px;
+  color: #ef4444;
+  margin-top: 8px;
+  font-family: 'JetBrains Mono', monospace;
+  text-transform: uppercase;
+  opacity: 0.8;
+  letter-spacing: 1px;
+}
