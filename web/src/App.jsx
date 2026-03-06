@@ -525,6 +525,7 @@ function App() {
   useEffect(() => {
     socket.on('game_created', ({ code, color }) => {
       resetAnalysisState();
+      resetMultiplayerState();
       setSavedGameId(null);
       window.history.pushState({}, '', '/?game=' + code);
       setRoomCode(code);
@@ -534,6 +535,7 @@ function App() {
 
     socket.on('game_joined', ({ code, color }) => {
       resetAnalysisState();
+      resetMultiplayerState();
       setSavedGameId(null);
       window.history.pushState({}, '', '/?game=' + code);
       setRoomCode(code);
@@ -542,6 +544,7 @@ function App() {
     });
 
     socket.on('game_start', () => {
+      resetMultiplayerState();
       setView('GAME');
     });
 
@@ -556,6 +559,7 @@ function App() {
 
     socket.on('spectator_joined', ({ code, history }) => {
       resetAnalysisState();
+      resetMultiplayerState();
       setSavedGameId(null);
       setRoomCode(code);
       setPlayerColor('spectator');
@@ -571,6 +575,7 @@ function App() {
 
     socket.on('cpu_game_created', (code) => {
       resetAnalysisState();
+      resetMultiplayerState();
       setSavedGameId(null);
       setRoomCode(code);
       setView('VS_CPU');
@@ -579,6 +584,7 @@ function App() {
     });
 
     socket.on('opponent_move', ({ startPos, endPos }) => {
+      setDrawOfferState('idle');
       setBoard(prevBoard => {
         const b = new Board();
         b.pieces = prevBoard.clonePieces();
@@ -614,6 +620,45 @@ function App() {
       setHistoryIndex(-1);
     });
 
+    socket.on('draw_offer_sent', () => {
+      setDrawOfferState('sent');
+    });
+
+    socket.on('draw_offer_received', ({ fromName }) => {
+      const accepted = window.confirm(`${fromName} offered tablas. Do you agree?`);
+      socket.emit('respond_draw_offer', { code: roomCode, accepted });
+    });
+
+    socket.on('draw_offer_declined', () => {
+      setDrawOfferState('idle');
+      alert('Your tablas offer was declined.');
+    });
+
+    socket.on('game_ended', (payload) => {
+      setDrawOfferState('idle');
+      setGameEndState(payload);
+      setBoard(prevBoard => {
+        const b = new Board();
+        b.pieces = prevBoard.clonePieces();
+        b.turn = prevBoard.turn;
+        b.history = [...prevBoard.history];
+        b.enPassantSquare = prevBoard.enPassantSquare;
+        b.halfMoveClock = prevBoard.halfMoveClock;
+        b.fullMoveNumber = prevBoard.fullMoveNumber;
+        b.gameStatus = payload.result === 'draw' ? 'draw' : 'resigned';
+
+        if (b.history.length > 0) {
+          const lastIndex = b.history.length - 1;
+          b.history[lastIndex] = {
+            ...b.history[lastIndex],
+            gameStatus: b.gameStatus
+          };
+        }
+
+        return b;
+      });
+    });
+
     socket.on('opponent_disconnected', () => {
       // If the game was already over, just let them review the board.
       // Otherwise notify them it ended abruptly.
@@ -626,6 +671,7 @@ function App() {
         setView('LOBBY');
         setBoard(new Board());
         resetAnalysisState();
+        resetMultiplayerState();
       }
     });
 
@@ -645,6 +691,10 @@ function App() {
       socket.off('past_games_list');
       socket.off('join_error');
       socket.off('opponent_move');
+      socket.off('draw_offer_sent');
+      socket.off('draw_offer_received');
+      socket.off('draw_offer_declined');
+      socket.off('game_ended');
       socket.off('opponent_disconnected');
       socket.off('game_saved');
       socket.off('waiting_count');
