@@ -4,7 +4,12 @@ export class StockfishEngine {
     constructor() {
         this.worker = null;
         this.ready = false;
-        this.onBestMove = null;
+        this.onBestMove = null;  // (uciMove, stats) => void
+        this._mode = 'depth';    // 'depth' or 'time'
+        this._depth = 15;
+        this._moveTime = 3000;   // ms
+        this._currentStats = { depth: 0, time: 0, nodes: 0 };
+        this._searchStart = 0;
         this._init();
     }
 
@@ -21,35 +26,52 @@ export class StockfishEngine {
                 this.ready = true;
                 console.log('Stockfish engine ready.');
             }
+
+            // Parse info lines for stats (depth, time, nodes)
+            if (line.startsWith('info') && line.includes('depth')) {
+                const depthMatch = line.match(/\bdepth (\d+)/);
+                const timeMatch = line.match(/\btime (\d+)/);
+                const nodesMatch = line.match(/\bnodes (\d+)/);
+                if (depthMatch) this._currentStats.depth = parseInt(depthMatch[1]);
+                if (timeMatch) this._currentStats.time = parseInt(timeMatch[1]);
+                if (nodesMatch) this._currentStats.nodes = parseInt(nodesMatch[1]);
+            }
+
             if (line.startsWith('bestmove')) {
                 const parts = line.split(' ');
-                const bestMove = parts[1]; // e.g. "e2e4"
+                const bestMove = parts[1];
+                // Compute wall-clock time as fallback
+                const wallTime = Date.now() - this._searchStart;
+                const stats = {
+                    depth: this._currentStats.depth,
+                    timeMs: this._currentStats.time || wallTime,
+                    nodes: this._currentStats.nodes,
+                };
                 if (this.onBestMove) {
-                    this.onBestMove(bestMove);
+                    this.onBestMove(bestMove, stats);
                 }
             }
         };
         this.worker.postMessage('uci');
     }
 
-    // Set engine skill level (0-20, default 20 = strongest)
-    setSkillLevel(level) {
-        this.worker.postMessage(`setoption name Skill Level value ${level}`);
-    }
+    setMode(mode) { this._mode = mode; }
+    setDepth(depth) { this._depth = depth; }
+    setMoveTime(ms) { this._moveTime = ms; }
 
-    // Set search depth
-    setDepth(depth) {
-        this._depth = depth || 15;
-    }
-
-    // Ask engine for best move given a FEN position
     getBestMove(fen) {
         if (!this.ready) {
             console.warn('Stockfish not ready yet');
             return;
         }
+        this._currentStats = { depth: 0, time: 0, nodes: 0 };
+        this._searchStart = Date.now();
         this.worker.postMessage(`position fen ${fen}`);
-        this.worker.postMessage(`go depth ${this._depth || 15}`);
+        if (this._mode === 'time') {
+            this.worker.postMessage(`go movetime ${this._moveTime}`);
+        } else {
+            this.worker.postMessage(`go depth ${this._depth}`);
+        }
     }
 
     destroy() {

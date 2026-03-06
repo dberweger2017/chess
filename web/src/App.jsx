@@ -36,6 +36,9 @@ function App() {
   const stockfishRef = useRef(null);
   const [cpuThinking, setCpuThinking] = useState(false);
   const [cpuDepth, setCpuDepth] = useState(15);
+  const [cpuMode, setCpuMode] = useState('depth'); // 'depth' or 'time'
+  const [cpuTime, setCpuTime] = useState(3); // seconds
+  const [engineStats, setEngineStats] = useState({}); // { moveIndex: { depth, timeMs } }
 
   // Multiplayer states
   const [view, setView] = useState('LOBBY');
@@ -142,16 +145,18 @@ function App() {
     setPlayerColor('white');
     setRoomCode('CPU');
     setView('VS_CPU');
+    setEngineStats({});
 
     // Initialize Stockfish
     if (stockfishRef.current) stockfishRef.current.destroy();
     const sf = new StockfishEngine();
+    sf.setMode(cpuMode);
     sf.setDepth(cpuDepth);
-    sf.onBestMove = (uciMove) => {
+    sf.setMoveTime(cpuTime * 1000);
+    sf.onBestMove = (uciMove, stats) => {
       const from = uciMove.substring(0, 2);
       const to = uciMove.substring(2, 4);
       setBoard(prevBoard => {
-        // Deep clone to avoid StrictMode double-mutation
         const b = new Board();
         b.pieces = prevBoard.clonePieces();
         b.turn = prevBoard.turn;
@@ -161,6 +166,9 @@ function App() {
         b.fullMoveNumber = prevBoard.fullMoveNumber;
         b.gameStatus = prevBoard.gameStatus;
         b.movePiece(from, to);
+        // Record stats for this move index
+        const moveIdx = b.history.length - 1;
+        setEngineStats(prev => ({ ...prev, [moveIdx]: stats }));
         return b;
       });
       setCpuThinking(false);
@@ -288,25 +296,41 @@ function App() {
             <span className="card-icon">🤖</span>
             <h2>Play vs Computer</h2>
             <p>Challenge Stockfish AI</p>
-            <div style={{ width: '100%', marginBottom: '14px' }}>
-              <label style={{ fontSize: '13px', color: '#9ca3af', display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
-                <span>Search Depth</span>
-                <span style={{ color: 'white', fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>{cpuDepth}</span>
-              </label>
-              <input
-                type="range"
-                min={1}
-                max={25}
-                value={cpuDepth}
-                onChange={(e) => setCpuDepth(Number(e.target.value))}
-                style={{ width: '100%', accentColor: '#8b5cf6' }}
-              />
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
-                <span>Easy</span>
-                <span style={{ color: cpuDepth === 15 ? '#8b5cf6' : '#6b7280' }}>15 ★</span>
-                <span>Hard</span>
-              </div>
+
+            {/* Mode toggle */}
+            <div className="mode-toggle">
+              <button className={`toggle-btn ${cpuMode === 'depth' ? 'active' : ''}`} onClick={() => setCpuMode('depth')}>By Depth</button>
+              <button className={`toggle-btn ${cpuMode === 'time' ? 'active' : ''}`} onClick={() => setCpuMode('time')}>By Time</button>
             </div>
+
+            {cpuMode === 'depth' ? (
+              <div style={{ width: '100%', marginBottom: '14px' }}>
+                <label className="slider-label">
+                  <span>Search Depth</span>
+                  <span className="slider-value">{cpuDepth}</span>
+                </label>
+                <input type="range" min={1} max={25} value={cpuDepth} onChange={(e) => setCpuDepth(Number(e.target.value))} className="range-input purple" />
+                <div className="slider-ticks">
+                  <span>Easy</span>
+                  <span style={{ color: cpuDepth === 15 ? '#8b5cf6' : undefined }}>15 ★</span>
+                  <span>Hard</span>
+                </div>
+              </div>
+            ) : (
+              <div style={{ width: '100%', marginBottom: '14px' }}>
+                <label className="slider-label">
+                  <span>Think Time</span>
+                  <span className="slider-value">{cpuTime}s</span>
+                </label>
+                <input type="range" min={1} max={30} value={cpuTime} onChange={(e) => setCpuTime(Number(e.target.value))} className="range-input purple" />
+                <div className="slider-ticks">
+                  <span>1s</span>
+                  <span style={{ color: cpuTime === 3 ? '#8b5cf6' : undefined }}>3s ★</span>
+                  <span>30s</span>
+                </div>
+              </div>
+            )}
+
             <button className="btn-green" onClick={handlePlayCPU} style={{ background: 'linear-gradient(135deg, #7c3aed, #8b5cf6)' }}>Start Game</button>
           </div>
 
@@ -448,13 +472,17 @@ function App() {
         <div className="history-list">
           {board.history.map((snapshot, idx) => {
             const isActive = historyIndex === idx || (historyIndex === -1 && idx === board.history.length - 1);
+            const stats = engineStats[idx];
             return (
               <div
                 key={idx}
                 className={`history-item ${isActive ? 'active' : ''}`}
                 onClick={() => handleHistoryClick(idx)}
               >
-                {idx === 0 ? "Start" : `${idx}. ${snapshot.move}`}
+                <span>{idx === 0 ? "Start" : `${idx}. ${snapshot.move}`}</span>
+                {stats && (
+                  <span className="engine-stats">d{stats.depth} · {(stats.timeMs / 1000).toFixed(1)}s</span>
+                )}
               </div>
             );
           })}
