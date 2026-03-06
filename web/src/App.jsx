@@ -109,9 +109,14 @@ function App() {
       setView('SPECTATING');
     });
 
-    socket.on('live_games_list', (games) => setLiveGames(games));
     socket.on('past_games_list', (games) => setPastGames(games));
     socket.on('waiting_count', (count) => setWaitingCount(count));
+
+    socket.on('cpu_game_created', (code) => {
+      setRoomCode(code);
+      setView('VS_CPU');
+      window.history.pushState({}, '', '/?game=' + code);
+    });
 
     socket.on('opponent_move', ({ startPos, endPos }) => {
       setBoard(prevBoard => {
@@ -182,6 +187,7 @@ function App() {
       socket.off('opponent_disconnected');
       socket.off('game_saved');
       socket.off('waiting_count');
+      socket.off('cpu_game_created');
     };
   }, []);
 
@@ -368,11 +374,12 @@ function App() {
   };
 
   const handlePlayCPU = () => {
+    socket.emit('create_cpu_game');
     const newBoard = new Board();
     setBoard(newBoard);
     setPlayerColor('white');
-    setRoomCode('CPU');
-    setView('VS_CPU');
+    setRoomCode('CPU (WAITING...)');
+    // We set view to VS_CPU only after receiving the server code
     setEngineStats({});
 
     // Initialize Stockfish
@@ -395,6 +402,11 @@ function App() {
         b.fullMoveNumber = prevBoard.fullMoveNumber;
         b.gameStatus = prevBoard.gameStatus;
         b.movePiece(from, to);
+
+        // Sync CPU move to server room
+        const newHistoryItem = b.history[b.history.length - 1];
+        socket.emit('make_move', { code: roomCode, startPos: from, endPos: to, newHistoryItem });
+
         // Record stats for this move index
         const moveIdx = b.history.length - 1;
         setEngineStats(prev => ({ ...prev, [moveIdx]: stats }));
@@ -491,9 +503,8 @@ function App() {
         const success = board.movePiece(selectedPos, pos);
         if (success) {
           const newHistoryItem = board.history[board.history.length - 1];
-          if (!isVsCPU) {
-            socket.emit('make_move', { code: roomCode, startPos: selectedPos, endPos: pos, newHistoryItem });
-          }
+          // Emit move even in VS_CPU if we have a server room code
+          socket.emit('make_move', { code: roomCode, startPos: selectedPos, endPos: pos, newHistoryItem });
 
           // Create a proper deep clone for React state
           const updatedBoard = new Board();

@@ -54,6 +54,24 @@ io.on('connection', (socket) => {
         console.log(`Room ${code} created by ${socket.id} (white)`);
     });
 
+    socket.on('create_cpu_game', () => {
+        let code = generateRoomCode();
+        while (rooms.has(code)) {
+            code = generateRoomCode();
+        }
+
+        rooms.set(code, {
+            players: { [socket.id]: 'white', 'cpu': 'black' },
+            full: true, // Show in live games immediately
+            history: [],
+            isCPU: true
+        });
+
+        socket.join(code);
+        socket.emit('cpu_game_created', code);
+        console.log(`User ${socket.id} started CPU game (Room ${code})`);
+    });
+
     socket.on('join_game', (code) => {
         code = code.toUpperCase();
         const room = rooms.get(code);
