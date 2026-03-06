@@ -725,7 +725,8 @@ function App() {
           {board.history.map((snapshot, idx) => {
             const isActive = historyIndex === idx || (historyIndex === -1 && idx === board.history.length - 1);
             const stats = engineStats[idx];
-            const analysis = gameAnalysis[idx]; // Analysis BEFORE this move
+            // Analysis of the position BEFORE this move was made
+            const analysis = idx > 0 ? gameAnalysis[idx - 1] : null;
             return (
               <div
                 key={idx}
@@ -741,7 +742,7 @@ function App() {
                 </div>
                 {analysis && idx > 0 && (
                   <div className="move-analysis" style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'flex', gap: '8px' }}>
-                    <span style={{ color: analysis.numericScore > 0 ? '#4ade80' : analysis.numericScore < 0 ? '#f87171' : '#9ca3af' }}>{analysis.score}</span>
+                    <span style={{ color: analysis.numericScore > 0 ? '#4ade80' : analysis.numericScore < -0 ? '#f87171' : '#9ca3af' }}>{analysis.score}</span>
                     <span>Best: {analysis.bestMove}</span>
                   </div>
                 )}
