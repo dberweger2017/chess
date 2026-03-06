@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { Board } from './ChessEngine';
 import { StockfishEngine } from './StockfishEngine';
 import './index.css';
@@ -46,6 +47,10 @@ function App() {
   const [analysisCache, setAnalysisCache] = useState({}); // { fen: lines[] }
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const analyzerRef = useRef(null);
+
+  // Auto Game Analysis
+  const [gameAnalysis, setGameAnalysis] = useState([]); // Array of analysis results
+  const [analysisProgress, setAnalysisProgress] = useState(null); // { current, total }
 
   // Multiplayer states
   const [view, setView] = useState('LOBBY');
@@ -162,6 +167,44 @@ function App() {
       socket.emit('get_past_games');
     }
   }, [view]);
+
+  // Auto Analysis Trigger
+  useEffect(() => {
+    if (board.gameStatus !== 'active' && board.history.length > 1 && view !== 'WAITING' && view !== 'SEARCHING' && view !== 'LOBBY') {
+      runAutoAnalysis(board);
+    }
+  }, [board.gameStatus, view]);
+
+  const runAutoAnalysis = (finalBoard) => {
+    if (!analyzerRef.current) analyzerRef.current = new StockfishEngine();
+    const analyzer = analyzerRef.current;
+
+    // Generate FEN array for the whole game
+    const fens = [];
+    const tmpBoard = new Board();
+    fens.push(tmpBoard.toFEN()); // Start pos
+
+    for (let i = 0; i < finalBoard.history.length; i++) {
+      const snap = finalBoard.history[i];
+      tmpBoard.pieces = snap.pieces;
+      tmpBoard.turn = (i % 2 === 0) ? 'black' : 'white';
+      tmpBoard.enPassantSquare = snap.enPassantSquare;
+      tmpBoard.halfMoveClock = snap.halfMoveClock;
+      fens.push(tmpBoard.toFEN());
+    }
+
+    setGameAnalysis([]);
+    setAnalysisProgress({ current: 0, total: fens.length });
+
+    analyzer.analyzeGame(fens, 17, (current, total) => {
+      setAnalysisProgress({ current, total });
+    }, (results) => {
+      // Add moveIdx to results for the chart
+      const chartData = results.map((r, i) => ({ ...r, moveIdx: i }));
+      setGameAnalysis(chartData);
+      setAnalysisProgress(null);
+    });
+  };
 
   const handleCreateGame = () => socket.emit('create_game');
   const handleFindGame = () => socket.emit('find_game');
@@ -478,6 +521,10 @@ function App() {
                   const moveCount = Math.max(0, moves.length - 1);
                   return (
                     <div key={game.id} className="list-item" onClick={() => {
+                      if (analyzerRef.current) analyzerRef.current.stopAnalysis();
+                      setGameAnalysis([]);
+                      setAnalysisProgress(null);
+
                       const reviewBoard = new Board();
                       reviewBoard.history = moves;
                       if (moves.length > 0) {
@@ -644,19 +691,59 @@ function App() {
 
       <div className="history-panel">
         <h3>Moves</h3>
+
+        {/* Evaluation Chart */}
+        {gameAnalysis.length > 0 && (
+          <div className="evaluation-chart" style={{ height: '100px', marginBottom: '12px', background: 'rgba(0,0,0,0.2)', padding: '5px', borderRadius: '8px' }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={gameAnalysis}>
+                <YAxis domain={[-10, 10]} hide />
+                <Tooltip
+                  cursor={{ stroke: 'rgba(255,255,255,0.1)' }}
+                  contentStyle={{ backgroundColor: '#1e1e2f', border: '1px solid #333', fontSize: '11px', borderRadius: '4px' }}
+                  labelFormatter={(idx) => `Move ${idx}`}
+                  formatter={(value) => [Number(value).toFixed(2), 'Eval']}
+                />
+                <ReferenceLine y={0} stroke="#444" strokeDasharray="3 3" />
+                <Line type="monotone" dataKey="numericScore" stroke="#8b5cf6" strokeWidth={2} dot={false} isAnimationActive={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+
+        {/* Analysis Progress Bar */}
+        {analysisProgress && (
+          <div className="analysis-progress-container" style={{ marginBottom: '12px', background: 'rgba(0,0,0,0.3)', borderRadius: '4px', overflow: 'hidden' }}>
+            <div style={{ height: '4px', width: `${(analysisProgress.current / analysisProgress.total) * 100}%`, background: 'var(--green)', transition: 'width 0.2s' }}></div>
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', textAlign: 'center', padding: '4px' }}>
+              Analyzing game {Math.min(analysisProgress.current + 1, analysisProgress.total)} / {analysisProgress.total}...
+            </div>
+          </div>
+        )}
+
         <div className="history-list">
           {board.history.map((snapshot, idx) => {
             const isActive = historyIndex === idx || (historyIndex === -1 && idx === board.history.length - 1);
             const stats = engineStats[idx];
+            const analysis = gameAnalysis[idx]; // Analysis BEFORE this move
             return (
               <div
                 key={idx}
                 className={`history-item ${isActive ? 'active' : ''}`}
                 onClick={() => handleHistoryClick(idx)}
+                style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '4px' }}
               >
-                <span>{idx === 0 ? "Start" : `${idx}. ${snapshot.move}`}</span>
-                {stats && (
-                  <span className="engine-stats">d{stats.depth} · {(stats.timeMs / 1000).toFixed(1)}s</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                  <span>{idx === 0 ? "Start" : `${idx}. ${snapshot.move}`}</span>
+                  {stats && (
+                    <span className="engine-stats">d{stats.depth} · {(stats.timeMs / 1000).toFixed(1)}s</span>
+                  )}
+                </div>
+                {analysis && idx > 0 && (
+                  <div className="move-analysis" style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'flex', gap: '8px' }}>
+                    <span style={{ color: analysis.numericScore > 0 ? '#4ade80' : analysis.numericScore < 0 ? '#f87171' : '#9ca3af' }}>{analysis.score}</span>
+                    <span>Best: {analysis.bestMove}</span>
+                  </div>
                 )}
               </div>
             );
