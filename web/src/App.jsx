@@ -62,6 +62,7 @@ function App() {
   // Game explorer
   const [liveGames, setLiveGames] = useState([]);
   const [pastGames, setPastGames] = useState([]);
+  const [pendingAnalysisId, setPendingAnalysisId] = useState(null);
 
   useEffect(() => {
     socket.on('game_created', ({ code, color }) => {
@@ -147,6 +148,12 @@ function App() {
       setBoard(new Board());
     });
 
+    socket.on('game_saved', (id) => {
+      window.history.pushState({}, '', '/?analysis=' + id);
+      setPendingAnalysisId(id);
+      socket.emit('get_past_games'); // Refresh games list so we can load it
+    });
+
     return () => {
       socket.off('game_created');
       socket.off('game_joined');
@@ -158,6 +165,7 @@ function App() {
       socket.off('join_error');
       socket.off('opponent_move');
       socket.off('opponent_disconnected');
+      socket.off('game_saved');
     };
   }, []);
 
@@ -168,14 +176,43 @@ function App() {
     }
   }, [view]);
 
-  // Auto Analysis Trigger
+  // Auto Analysis URL Trigger
   useEffect(() => {
-    if (board.gameStatus !== 'active' && board.history.length > 1 && view !== 'WAITING' && view !== 'SEARCHING' && view !== 'LOBBY') {
-      runAutoAnalysis(board);
-    }
-  }, [board.gameStatus, view]);
+    const urlParams = new URLSearchParams(window.location.search);
+    const analysisId = urlParams.get('analysis') || pendingAnalysisId;
 
-  const runAutoAnalysis = (finalBoard) => {
+    if (analysisId && pastGames.length > 0) {
+      const gameToAnalyze = pastGames.find(g => g.id === parseInt(analysisId));
+      if (gameToAnalyze) {
+        setRoomCode(gameToAnalyze.room_code);
+        const reviewBoard = new Board();
+        const moves = JSON.parse(gameToAnalyze.moves);
+        reviewBoard.history = moves;
+
+        if (moves.length > 0) {
+          const lastSnap = moves[moves.length - 1];
+          reviewBoard.pieces = lastSnap.pieces;
+          reviewBoard.turn = moves.length % 2 === 1 ? 'black' : 'white';
+        }
+        reviewBoard.gameStatus = 'ended'; // Force ended status
+
+        setBoard(reviewBoard);
+        setHistoryIndex(-1);
+        setView('REVIEW');
+        setPendingAnalysisId(null);
+
+        if (gameToAnalyze.analysis) {
+          // Already have cached analysis! Use it immediately
+          setGameAnalysis(JSON.parse(gameToAnalyze.analysis));
+        } else if (!analyzerRef.current || !analyzerRef.current._isAnalyzing) {
+          // Start the auto analysis sequence
+          runAutoAnalysis(reviewBoard, gameToAnalyze.id);
+        }
+      }
+    }
+  }, [pastGames, pendingAnalysisId]);
+
+  const runAutoAnalysis = (finalBoard, gameId = null) => {
     if (!analyzerRef.current) analyzerRef.current = new StockfishEngine();
     const analyzer = analyzerRef.current;
 
@@ -195,13 +232,17 @@ function App() {
     setGameAnalysis([]);
     setAnalysisProgress({ current: 0, total: fens.length });
 
-    analyzer.analyzeGame(fens, 17, (current, total) => {
+    analyzer.analyzeGame(fens, 10, (current, total) => {
       setAnalysisProgress({ current, total });
     }, (results) => {
       // Add moveIdx to results for the chart
       const chartData = results.map((r, i) => ({ ...r, moveIdx: i }));
       setGameAnalysis(chartData);
       setAnalysisProgress(null);
+
+      if (gameId) {
+        socket.emit('save_game_analysis', { id: gameId, analysis: chartData });
+      }
     });
   };
 
