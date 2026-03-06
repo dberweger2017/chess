@@ -35,6 +35,7 @@ function App() {
   const [historyIndex, setHistoryIndex] = useState(-1);
   const stockfishRef = useRef(null);
   const [cpuThinking, setCpuThinking] = useState(false);
+  const [cpuDepth, setCpuDepth] = useState(15);
 
   // Multiplayer states
   const [view, setView] = useState('LOBBY');
@@ -145,7 +146,7 @@ function App() {
     // Initialize Stockfish
     if (stockfishRef.current) stockfishRef.current.destroy();
     const sf = new StockfishEngine();
-    sf.setDepth(15);
+    sf.setDepth(cpuDepth);
     sf.onBestMove = (uciMove) => {
       const from = uciMove.substring(0, 2);
       const to = uciMove.substring(2, 4);
@@ -286,7 +287,26 @@ function App() {
           <div className="card">
             <span className="card-icon">🤖</span>
             <h2>Play vs Computer</h2>
-            <p>Challenge Stockfish AI (depth 15)</p>
+            <p>Challenge Stockfish AI</p>
+            <div style={{ width: '100%', marginBottom: '14px' }}>
+              <label style={{ fontSize: '13px', color: '#9ca3af', display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                <span>Search Depth</span>
+                <span style={{ color: 'white', fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>{cpuDepth}</span>
+              </label>
+              <input
+                type="range"
+                min={1}
+                max={25}
+                value={cpuDepth}
+                onChange={(e) => setCpuDepth(Number(e.target.value))}
+                style={{ width: '100%', accentColor: '#8b5cf6' }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#6b7280', marginTop: '2px' }}>
+                <span>Easy</span>
+                <span style={{ color: cpuDepth === 15 ? '#8b5cf6' : '#6b7280' }}>15 ★</span>
+                <span>Hard</span>
+              </div>
+            </div>
             <button className="btn-green" onClick={handlePlayCPU} style={{ background: 'linear-gradient(135deg, #7c3aed, #8b5cf6)' }}>Start Game</button>
           </div>
 
