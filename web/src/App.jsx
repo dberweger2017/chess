@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { Board } from './ChessEngine';
+import { StockfishEngine } from './StockfishEngine';
 import './index.css';
 
 const PIECE_IMAGES = {
@@ -32,6 +33,8 @@ function App() {
   const [selectedPos, setSelectedPos] = useState(null);
   const [legalMoves, setLegalMoves] = useState([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
+  const stockfishRef = useRef(null);
+  const [cpuThinking, setCpuThinking] = useState(false);
 
   // Multiplayer states
   const [view, setView] = useState('LOBBY');
@@ -125,6 +128,31 @@ function App() {
   const handleCreateGame = () => socket.emit('create_game');
   const handleFindGame = () => socket.emit('find_game');
 
+  const handlePlayCPU = () => {
+    const newBoard = new Board();
+    setBoard(newBoard);
+    setPlayerColor('white');
+    setRoomCode('CPU');
+    setView('VS_CPU');
+
+    // Initialize Stockfish
+    if (stockfishRef.current) stockfishRef.current.destroy();
+    const sf = new StockfishEngine();
+    sf.setDepth(15);
+    sf.onBestMove = (uciMove) => {
+      // uciMove is like "e7e5"
+      const from = uciMove.substring(0, 2);
+      const to = uciMove.substring(2, 4);
+      setBoard(prevBoard => {
+        const b = Object.assign(Object.create(Object.getPrototypeOf(prevBoard)), prevBoard);
+        b.movePiece(from, to);
+        return b;
+      });
+      setCpuThinking(false);
+    };
+    stockfishRef.current = sf;
+  };
+
   const handleJoinGame = (e) => {
     e.preventDefault();
     if (joinCodeInput.trim().length === 3) {
@@ -133,22 +161,36 @@ function App() {
   };
 
   const handleSquareClick = (pos) => {
-    if (view !== 'GAME') return;
+    const isVsCPU = view === 'VS_CPU';
+    if (view !== 'GAME' && !isVsCPU) return;
     if (historyIndex !== -1) return;
     if (playerColor === 'spectator') return;
     if (board.turn !== playerColor) return;
     if (board.gameStatus !== 'active') return;
+    if (cpuThinking) return;
 
     if (selectedPos) {
       if (legalMoves.includes(pos)) {
         const success = board.movePiece(selectedPos, pos);
         if (success) {
           const newHistoryItem = board.history[board.history.length - 1];
-          socket.emit('make_move', { code: roomCode, startPos: selectedPos, endPos: pos, newHistoryItem });
-          setBoard(Object.assign(Object.create(Object.getPrototypeOf(board)), board));
+          if (!isVsCPU) {
+            socket.emit('make_move', { code: roomCode, startPos: selectedPos, endPos: pos, newHistoryItem });
+          }
+          const updatedBoard = Object.assign(Object.create(Object.getPrototypeOf(board)), board);
+          setBoard(updatedBoard);
           setSelectedPos(null);
           setLegalMoves([]);
           setHistoryIndex(-1);
+
+          // If vs CPU, ask Stockfish
+          if (isVsCPU && updatedBoard.gameStatus === 'active') {
+            setCpuThinking(true);
+            // Small delay so the UI updates first
+            setTimeout(() => {
+              stockfishRef.current?.getBestMove(updatedBoard.toFEN());
+            }, 200);
+          }
           return;
         }
       }
@@ -215,6 +257,13 @@ function App() {
             <h2>Quick Match</h2>
             <p>Find a random opponent instantly</p>
             <button className="btn-green" onClick={handleFindGame}>Find Match</button>
+          </div>
+
+          <div className="card">
+            <span className="card-icon">🤖</span>
+            <h2>Play vs Computer</h2>
+            <p>Challenge Stockfish AI (depth 15)</p>
+            <button className="btn-green" onClick={handlePlayCPU} style={{ background: 'linear-gradient(135deg, #7c3aed, #8b5cf6)' }}>Start Game</button>
           </div>
 
           <div className="card">
@@ -296,7 +345,7 @@ function App() {
     );
   }
 
-  // ──────── GAME / SPECTATING VIEW ────────
+  // ──────── GAME / SPECTATING / VS_CPU VIEW ────────
   const boardRows = [];
   for (let r = 0; r < 8; r++) {
     for (let c = 0; c < 8; c++) {
@@ -315,21 +364,24 @@ function App() {
   };
 
   const isSpectating = view === 'SPECTATING';
+  const isVsCPU = view === 'VS_CPU';
   const isMyTurn = board.turn === playerColor;
 
   const statusText = board.gameStatus === 'checkmate'
     ? `Checkmate! ${board.turn === 'white' ? 'Black' : 'White'} wins!`
     : board.gameStatus === 'stalemate'
-      ? 'Stalemate — Draw!'
-      : historyIndex !== -1
-        ? 'Viewing History'
-        : isSpectating
-          ? `${board.turn === 'white' ? 'White' : 'Black'} to move`
-          : isMyTurn ? 'Your Turn' : "Opponent's Turn";
+      ? 'Stalemate \u2014 Draw!'
+      : cpuThinking
+        ? 'Engine is thinking\u2026'
+        : historyIndex !== -1
+          ? 'Viewing History'
+          : isSpectating
+            ? `${board.turn === 'white' ? 'White' : 'Black'} to move`
+            : isMyTurn ? 'Your Turn' : (isVsCPU ? 'Engine is thinking\u2026' : "Opponent's Turn");
 
   const statusClass = board.gameStatus !== 'active'
     ? 'analyzing'
-    : historyIndex !== -1
+    : cpuThinking || historyIndex !== -1
       ? 'analyzing'
       : isMyTurn && !isSpectating ? '' : 'opponent-turn';
 
@@ -337,13 +389,13 @@ function App() {
     <div className="chess-container game-layout">
       <div className="game-wrapper">
         <div className="game-header">
-          <div className="room-badge">{isSpectating ? '📡 Spectating' : `Room ${roomCode}`}</div>
+          <div className="room-badge">{isSpectating ? '📡 Spectating' : isVsCPU ? '🤖 vs Stockfish' : `Room ${roomCode}`}</div>
           <div className={`status-bar ${statusClass}`}>{statusText}</div>
         </div>
         <div className="board">{boardRows}</div>
         <div className="controls">
-          <p>{isSpectating ? <b>Observer Mode</b> : <>Playing as <b>{playerColor}</b></>}</p>
-          <button className="btn-red" onClick={() => { setView('LOBBY'); setBoard(new Board()); }}>Leave Game</button>
+          <p>{isSpectating ? <b>Observer Mode</b> : isVsCPU ? <>You (White) vs <b>Stockfish</b></> : <>Playing as <b>{playerColor}</b></>}</p>
+          <button className="btn-red" onClick={() => { setView('LOBBY'); setBoard(new Board()); if (stockfishRef.current) { stockfishRef.current.destroy(); stockfishRef.current = null; } }}>Leave Game</button>
         </div>
       </div>
 
