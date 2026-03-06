@@ -516,6 +516,7 @@ function App() {
     resetAnalysisState();
     setRoomCode(gameToAnalyze.room_code);
     setSavedGameId(gameToAnalyze.id);
+    setPlayerColor('spectator');
 
     const moves = gameToAnalyze.moves ? JSON.parse(gameToAnalyze.moves) : [];
     const reviewBoard = createBoardFromHistory(moves, { ended: true });
