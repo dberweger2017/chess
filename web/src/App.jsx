@@ -746,7 +746,12 @@ function App() {
       <div className="game-wrapper">
         <div className="game-header">
           <div className="room-badge">{isReview ? '📜 Review' : isSpectating ? '📡 Spectating' : isVsCPU ? '🤖 vs Stockfish' : `Room ${roomCode}`}</div>
-          <div className={`status-bar ${statusClass}`}>{statusText}</div>
+          {view === 'GAME' && (
+            <button className="btn-ghost" onClick={() => window.open(`/?spectate=${roomCode}`, '_blank')} style={{ fontSize: '11px', padding: '4px 8px', marginLeft: 'auto' }}>
+              🔍 Live Spectator Analysis
+            </button>
+          )}
+          <div className={`status-bar ${statusClass}`} style={{ marginLeft: view === 'GAME' ? '8px' : 'auto' }}>{statusText}</div>
         </div>
         <div className="board">{boardRows}</div>
         <div className="controls">
