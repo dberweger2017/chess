@@ -102,6 +102,77 @@ function normalizeStoredAnalysis(rawAnalysis, expectedLength, minimumDepth) {
   }
 }
 
+function AnalysisArrows({ analysisLines, playerColor }) {
+  if (analysisLines.length === 0) return null;
+
+  const getSquareCenter = (pos) => {
+    const [c, r] = Board.posToCoord(pos);
+    const displayC = playerColor === 'black' ? 7 - c : c;
+    const displayR = playerColor === 'black' ? r : 7 - r;
+    const x = (displayC + 0.5) * (100 / 8);
+    const y = (displayR + 0.5) * (100 / 8);
+    return { x: `${x}%`, y: `${y}%` };
+  };
+
+  const parsedLines = analysisLines.map((line) => {
+    let numericScore = 0;
+    if (line.score.startsWith('M')) {
+      numericScore = line.score.includes('-') ? -10000 : 10000;
+    } else {
+      numericScore = parseFloat(line.score) * 100;
+    }
+    return { ...line, numericScore };
+  });
+
+  const maxScore = Math.max(...parsedLines.map((line) => line.numericScore));
+  const minScore = Math.min(...parsedLines.map((line) => line.numericScore));
+  const range = maxScore - minScore || 1;
+
+  return (
+    <svg className="analysis-arrows-overlay" style={{
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      width: '100%',
+      height: '100%',
+      pointerEvents: 'none',
+      zIndex: 10
+    }}>
+      <defs>
+        <marker id="arrowhead" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+          <path d="M0,0 L6,3 L0,6 Z" fill="rgba(0, 242, 255, 0.8)" />
+        </marker>
+      </defs>
+      {parsedLines.map((line, idx) => {
+        const move = line.moves[0];
+        if (!move) return null;
+        const fromPos = move.slice(0, 2);
+        const toPos = move.slice(2, 4);
+        const from = getSquareCenter(fromPos);
+        const to = getSquareCenter(toPos);
+        const weight = 0.3 + (parsedLines.length > 1 ? (line.numericScore - minScore) / range : 0.7) * 0.7;
+        const thickness = 4 + weight * 8;
+        const opacity = 0.2 + weight * 0.8;
+
+        return (
+          <line
+            key={idx}
+            x1={from.x}
+            y1={from.y}
+            x2={to.x}
+            y2={to.y}
+            stroke="rgba(0, 242, 255, 0.6)"
+            strokeWidth={thickness}
+            strokeOpacity={opacity}
+            markerEnd="url(#arrowhead)"
+            style={{ transition: 'all 0.3s ease' }}
+          />
+        );
+      })}
+    </svg>
+  );
+}
+
 function App() {
   const [board, setBoard] = useState(new Board());
   const [selectedPos, setSelectedPos] = useState(null);
