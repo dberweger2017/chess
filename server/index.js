@@ -176,6 +176,18 @@ io.on('connection', (socket) => {
         });
     });
 
+    socket.on('save_multiplayer_game', ({ code, history }) => {
+        const room = rooms.get(code);
+        if (room && !room.saved) {
+            room.saved = true; // Prevent double save
+            saveGame(code, history, (id) => {
+                if (id) {
+                    io.to(code).emit('game_saved', id);
+                }
+            });
+        }
+    });
+
     socket.on('save_game_analysis', ({ id, analysis }) => {
         saveAnalysis(id, analysis);
     });
@@ -201,8 +213,11 @@ io.on('connection', (socket) => {
             if (roomData.players[socket.id]) {
                 io.to(code).emit('opponent_disconnected');
 
-                // Save to DB before destroying
-                saveGame(code, roomData.history);
+                // Save to DB before destroying if not already saved
+                if (!roomData.saved && roomData.history.length > 2) {
+                    roomData.saved = true;
+                    saveGame(code, roomData.history);
+                }
 
                 rooms.delete(code);
             }

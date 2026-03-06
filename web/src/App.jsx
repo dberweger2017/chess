@@ -165,7 +165,8 @@ function App() {
 
     socket.on('game_saved', (id) => {
       setSavedGameId(id);
-      socket.emit('get_past_games'); // Refresh games list so we can load it
+      window.open('/?analysis=' + id, '_blank');
+      socket.emit('get_past_games'); // Refresh games list
     });
 
     return () => {
@@ -508,6 +509,11 @@ function App() {
           setSelectedPos(null);
           setLegalMoves([]);
           setHistoryIndex(-1);
+
+          // Trigger save if game ended in multiplayer
+          if (!isVsCPU && updatedBoard.gameStatus !== 'active') {
+            socket.emit('save_multiplayer_game', { code: roomCode, history: updatedBoard.history });
+          }
 
           // If vs CPU, ask Stockfish or save if game over
           if (isVsCPU) {
