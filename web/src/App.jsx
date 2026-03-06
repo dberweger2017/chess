@@ -195,13 +195,18 @@ function App() {
 
   useEffect(() => {
     if (view === 'LOBBY') {
-      window.history.pushState({}, '', '/');
+      const urlParams = new URLSearchParams(window.location.search);
+      const isRedirecting = urlParams.get('game') || urlParams.get('spectate') || urlParams.get('analysis');
+
+      if (!isRedirecting) {
+        window.history.pushState({}, '', '/');
+      }
+
       socket.emit('get_live_games');
       socket.emit('get_past_games');
       socket.emit('get_waiting_count');
 
       // Auto-join from URL if specified
-      const urlParams = new URLSearchParams(window.location.search);
       const gameCode = urlParams.get('game');
       if (gameCode && joinCodeInput !== gameCode) {
         setJoinCodeInput(gameCode);
@@ -986,8 +991,9 @@ function App() {
             </button>
             <button className="btn-blue"
               onClick={() => {
-                if (savedGameId) {
-                  window.open('/?analysis=' + savedGameId, '_blank');
+                const analysisId = savedGameId;
+                if (analysisId) {
+                  window.open('/?analysis=' + analysisId, '_blank');
                 } else {
                   window.open('/?spectate=' + roomCode, '_blank');
                 }
