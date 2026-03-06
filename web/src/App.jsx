@@ -1333,6 +1333,8 @@ function App() {
     ? `Checkmate! ${board.turn === 'white' ? 'Black' : 'White'} wins!`
     : board.gameStatus === 'stalemate'
       ? 'Stalemate \u2014 Draw!'
+      : isReview
+        ? (historyIndex === -1 ? 'Review Ready' : 'Reviewing Position')
       : cpuThinking
         ? 'Engine is thinking\u2026'
         : historyIndex !== -1
