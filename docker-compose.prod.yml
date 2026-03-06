@@ -1,0 +1,6 @@
+services:
+  chess-web:
+    # No ports here! Handled by global gateway.
+    networks:
+      - default
+      - proxy-nw

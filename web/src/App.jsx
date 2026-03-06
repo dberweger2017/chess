@@ -25,8 +25,8 @@ const PIECE_IMAGES = {
 
 const FILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
 
-// Connect to the local Node server
-const socket = io('http://localhost:3001');
+// Connect to the Node server (using default host for reverse proxy support)
+const socket = io();
 
 function App() {
   const [board, setBoard] = useState(new Board());
