@@ -91,9 +91,16 @@ function App() {
 
     socket.on('opponent_move', ({ startPos, endPos }) => {
       setBoard(prevBoard => {
-        const newBoard = Object.assign(Object.create(Object.getPrototypeOf(prevBoard)), prevBoard);
-        newBoard.movePiece(startPos, endPos);
-        return newBoard;
+        const b = new Board();
+        b.pieces = prevBoard.clonePieces();
+        b.turn = prevBoard.turn;
+        b.history = [...prevBoard.history];
+        b.enPassantSquare = prevBoard.enPassantSquare;
+        b.halfMoveClock = prevBoard.halfMoveClock;
+        b.fullMoveNumber = prevBoard.fullMoveNumber;
+        b.gameStatus = prevBoard.gameStatus;
+        b.movePiece(startPos, endPos);
+        return b;
       });
       setHistoryIndex(-1);
     });
@@ -140,11 +147,18 @@ function App() {
     const sf = new StockfishEngine();
     sf.setDepth(15);
     sf.onBestMove = (uciMove) => {
-      // uciMove is like "e7e5"
       const from = uciMove.substring(0, 2);
       const to = uciMove.substring(2, 4);
       setBoard(prevBoard => {
-        const b = Object.assign(Object.create(Object.getPrototypeOf(prevBoard)), prevBoard);
+        // Deep clone to avoid StrictMode double-mutation
+        const b = new Board();
+        b.pieces = prevBoard.clonePieces();
+        b.turn = prevBoard.turn;
+        b.history = [...prevBoard.history];
+        b.enPassantSquare = prevBoard.enPassantSquare;
+        b.halfMoveClock = prevBoard.halfMoveClock;
+        b.fullMoveNumber = prevBoard.fullMoveNumber;
+        b.gameStatus = prevBoard.gameStatus;
         b.movePiece(from, to);
         return b;
       });
