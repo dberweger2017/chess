@@ -227,6 +227,96 @@ input::placeholder {
   font-size: 14px;
 }
 
+/* Range input override */
+input[type="range"],
+.range-input {
+  -webkit-appearance: auto;
+  appearance: auto;
+  padding: 0;
+  border: none;
+  background: transparent;
+  letter-spacing: normal;
+  font-size: inherit;
+  text-transform: none;
+  cursor: pointer;
+  width: 100%;
+}
+
+.range-input.purple {
+  accent-color: #8b5cf6;
+}
+
+/* Mode toggle */
+.mode-toggle {
+  display: flex;
+  width: 100%;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 16px;
+  border: 1px solid var(--border);
+}
+
+.toggle-btn {
+  flex: 1;
+  padding: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  background: transparent;
+  color: var(--text-muted);
+  border: none;
+  border-radius: 0;
+  cursor: pointer;
+  transition: all 0.2s;
+  width: auto;
+}
+
+.toggle-btn.active {
+  background: rgba(139, 92, 246, 0.25);
+  color: #c4b5fd;
+}
+
+.toggle-btn:hover:not(.active) {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* Slider label & ticks */
+.slider-label {
+  font-size: 13px;
+  color: var(--text-muted);
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.slider-value {
+  color: white;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.slider-ticks {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #6b7280;
+  margin-top: 2px;
+}
+
+/* Engine stats in history */
+.engine-stats {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', monospace;
+  opacity: 0.7;
+  margin-left: 6px;
+  white-space: nowrap;
+}
+
+.history-item.active .engine-stats {
+  color: rgba(255, 255, 255, 0.7);
+}
+
 .join-form {
   display: flex;
   flex-direction: column;
@@ -637,6 +727,9 @@ input::placeholder {
   font-family: 'JetBrains Mono', monospace;
   font-size: 13px;
   color: var(--text-muted);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
 .history-item:hover {
