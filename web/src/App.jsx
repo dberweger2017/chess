@@ -291,6 +291,64 @@ function App() {
     startPendingAutoAnalysis();
   };
 
+  function initStockfish(code) {
+    // Initialize Stockfish with a specific room code
+    if (stockfishRef.current) stockfishRef.current.destroy();
+    const sf = new StockfishEngine();
+    sf.setMode(cpuMode);
+    sf.setDepth(cpuDepth);
+    sf.setMoveTime(cpuTime * 1000);
+    sf.onBestMove = (uciMove, stats) => {
+      const from = uciMove.substring(0, 2);
+      const to = uciMove.substring(2, 4);
+      let updatedB = null;
+      setBoard(prevBoard => {
+        const b = new Board();
+        b.pieces = prevBoard.clonePieces();
+        b.turn = prevBoard.turn;
+        b.history = [...prevBoard.history];
+        b.enPassantSquare = prevBoard.enPassantSquare;
+        b.halfMoveClock = prevBoard.halfMoveClock;
+        b.fullMoveNumber = prevBoard.fullMoveNumber;
+        b.gameStatus = prevBoard.gameStatus;
+        b.movePiece(from, to);
+
+        // Sync CPU move to server room using the code passed to initStockfish
+        const newHistoryItem = b.history[b.history.length - 1];
+        socket.emit('make_move', { code: code, startPos: from, endPos: to, newHistoryItem });
+
+        // Record stats for this move index
+        const moveIdx = b.history.length - 1;
+        setEngineStats(prev => ({ ...prev, [moveIdx]: stats }));
+
+        // Execute pre-move if present and valid
+        if (preMove) {
+          const pMoves = b.getLegalMovesForPiece(preMove.startPos);
+          if (pMoves.includes(preMove.endPos)) {
+            b.movePiece(preMove.startPos, preMove.endPos);
+            setTimeout(() => {
+              stockfishRef.current?.getBestMove(b.toFEN());
+            }, 200);
+          } else {
+            setCpuThinking(false);
+          }
+          setPreMove(null);
+        } else {
+          setCpuThinking(false);
+        }
+
+        updatedB = b;
+        return b;
+      });
+      setCpuThinking(false);
+
+      if (updatedB && updatedB.gameStatus !== 'active') {
+        saveCpuGame(updatedB);
+      }
+    };
+    stockfishRef.current = sf;
+  }
+
   useEffect(() => {
     socket.on('game_created', ({ code, color }) => {
       resetAnalysisState();
@@ -592,66 +650,6 @@ function App() {
     setRoomCode('CPU (WAITING...)');
     setEngineStats({});
   };
-
-  function initStockfish(code) {
-    // Initialize Stockfish with a specific room code
-    if (stockfishRef.current) stockfishRef.current.destroy();
-    const sf = new StockfishEngine();
-    sf.setMode(cpuMode);
-    sf.setDepth(cpuDepth);
-    sf.setMoveTime(cpuTime * 1000);
-    sf.onBestMove = (uciMove, stats) => {
-      const from = uciMove.substring(0, 2);
-      const to = uciMove.substring(2, 4);
-      let updatedB = null;
-      setBoard(prevBoard => {
-        const b = new Board();
-        b.pieces = prevBoard.clonePieces();
-        b.turn = prevBoard.turn;
-        b.history = [...prevBoard.history];
-        b.enPassantSquare = prevBoard.enPassantSquare;
-        b.halfMoveClock = prevBoard.halfMoveClock;
-        b.fullMoveNumber = prevBoard.fullMoveNumber;
-        b.gameStatus = prevBoard.gameStatus;
-        b.movePiece(from, to);
-
-        // Sync CPU move to server room using the code passed to initStockfish
-        const newHistoryItem = b.history[b.history.length - 1];
-        socket.emit('make_move', { code: code, startPos: from, endPos: to, newHistoryItem });
-
-        // Record stats for this move index
-        const moveIdx = b.history.length - 1;
-        setEngineStats(prev => ({ ...prev, [moveIdx]: stats }));
-
-        // Execute pre-move if present and valid
-        if (preMove) {
-          const pMoves = b.getLegalMovesForPiece(preMove.startPos);
-          if (pMoves.includes(preMove.endPos)) {
-            b.movePiece(preMove.startPos, preMove.endPos);
-            // Trigger the engine's next move after our pre-move
-            setTimeout(() => {
-              stockfishRef.current?.getBestMove(b.toFEN());
-            }, 200);
-          } else {
-            // Pre-move was invalid, it's just our turn now
-            setCpuThinking(false);
-          }
-          setPreMove(null);
-        } else {
-          setCpuThinking(false);
-        }
-
-        updatedB = b;
-        return b;
-      });
-      setCpuThinking(false);
-
-      if (updatedB && updatedB.gameStatus !== 'active') {
-        saveCpuGame(updatedB);
-      }
-    };
-    stockfishRef.current = sf;
-  }
 
   const handleJoinGame = (e) => {
     e.preventDefault();
