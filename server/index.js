@@ -2,6 +2,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
+const { saveGame, getPastGames } = require('./db');
 
 const app = express();
 app.use(cors());
@@ -86,7 +87,8 @@ io.on('connection', (socket) => {
 
             rooms.set(code, {
                 players: { [socket.id]: 'white' },
-                full: false
+                full: false,
+                history: [] // Start tracking move history for the DB
             });
 
             waitingPlayer = { id: socket.id, code: code };
@@ -116,9 +118,42 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('make_move', ({ code, startPos, endPos }) => {
-        // Broadcast the move to the OTHER player in the room
+    socket.on('make_move', ({ code, startPos, endPos, newHistoryItem }) => {
+        // Broadcast the move to the OTHER player in the room (and spectators)
         socket.to(code).emit('opponent_move', { startPos, endPos });
+
+        // Save to server room state
+        const room = rooms.get(code);
+        if (room && newHistoryItem) {
+            room.history.push(newHistoryItem);
+        }
+    });
+
+    socket.on('get_live_games', () => {
+        const liveGames = [];
+        rooms.forEach((roomData, code) => {
+            if (roomData.full) {
+                liveGames.push({ code, moves: roomData.history.length });
+            }
+        });
+        socket.emit('live_games_list', liveGames);
+    });
+
+    socket.on('spectate_game', (code) => {
+        const room = rooms.get(code);
+        if (room) {
+            socket.join(code);
+            // Send the current history to the spectator so they can build the board
+            socket.emit('spectator_joined', { code, history: room.history });
+        } else {
+            socket.emit('join_error', 'Game no longer exists.');
+        }
+    });
+
+    socket.on('get_past_games', () => {
+        getPastGames((games) => {
+            socket.emit('past_games_list', games);
+        });
     });
 
     socket.on('disconnect', () => {
@@ -130,11 +165,15 @@ io.on('connection', (socket) => {
             waitingPlayer = null;
         }
 
-        // Notify rooms the user was in
+        // Notify rooms the user was in and close them down
         rooms.forEach((roomData, code) => {
             if (roomData.players[socket.id]) {
                 io.to(code).emit('opponent_disconnected');
-                rooms.delete(code); // Simple cleanup
+
+                // Save to DB before destroying
+                saveGame(code, roomData.history);
+
+                rooms.delete(code);
             }
         });
     });
