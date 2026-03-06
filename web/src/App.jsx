@@ -803,7 +803,12 @@ function App() {
   if (!userProfile.name) {
     return (
       <div id="app-root">
-        <IdentityModal />
+        <IdentityModal
+          tempProfile={tempProfile}
+          setTempProfile={setTempProfile}
+          saveProfile={saveProfile}
+          profileError={profileError}
+        />
       </div>
     );
   }
@@ -1177,3 +1182,29 @@ function App() {
 }
 
 export default App;
+
+const IdentityModal = ({ tempProfile, setTempProfile, saveProfile, profileError }) => (
+  <div className="identity-overlay">
+    <div className="identity-modal">
+      <h2>Identity Setup</h2>
+      <p>Your handle is required to access the neural chess network.</p>
+      <div className="identity-form">
+        <div className="input-block">
+          <label>Shadow Handle</label>
+          <input
+            type="text"
+            className="cyber-input"
+            placeholder="e.g. ZeroCool"
+            value={tempProfile.name}
+            onChange={e => setTempProfile({ name: e.target.value })}
+            autoFocus
+          />
+        </div>
+        <button className="btn-cyber" style={{ marginTop: '10px' }} onClick={saveProfile}>
+          Authorize Access
+        </button>
+        {profileError && <div className="cyber-status">{profileError}</div>}
+      </div>
+    </div>
+  </div>
+);
