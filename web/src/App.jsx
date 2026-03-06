@@ -571,8 +571,7 @@ function App() {
 
       // Auto-join from URL if specified
       const gameCode = urlParams.get('game');
-      if (gameCode && joinCodeInput !== gameCode) {
-        setJoinCodeInput(gameCode);
+      if (gameCode) {
         socket.emit('join_game', gameCode.toUpperCase());
       }
     }
@@ -650,52 +649,56 @@ function App() {
     const reviewRequestId = reviewLoadTokenRef.current + 1;
     reviewLoadTokenRef.current = reviewRequestId;
 
-    resetAnalysisState();
-    setRoomCode(gameToAnalyze.room_code);
-    setSavedGameId(gameToAnalyze.id);
-    setPlayerColor('spectator');
+    const frameId = window.requestAnimationFrame(() => {
+      resetAnalysisState();
+      setRoomCode(gameToAnalyze.room_code);
+      setSavedGameId(gameToAnalyze.id);
+      setPlayerColor('spectator');
 
-    const moves = gameToAnalyze.moves ? JSON.parse(gameToAnalyze.moves) : [];
-    const reviewBoard = createBoardFromHistory(moves, { ended: true });
-    setBoard(reviewBoard);
-    setHistoryIndex(-1);
-    setPendingAnalysisId(null);
+      const moves = gameToAnalyze.moves ? JSON.parse(gameToAnalyze.moves) : [];
+      const reviewBoard = createBoardFromHistory(moves, { ended: true });
+      setBoard(reviewBoard);
+      setHistoryIndex(-1);
+      setPendingAnalysisId(null);
 
-    const cachedAnalysis = normalizeStoredAnalysis(
-      gameToAnalyze.analysis,
-      moves.length,
-      REVIEW_ANALYSIS_DEPTH
-    );
+      const cachedAnalysis = normalizeStoredAnalysis(
+        gameToAnalyze.analysis,
+        moves.length,
+        REVIEW_ANALYSIS_DEPTH
+      );
 
-    if (cachedAnalysis) {
-      analysisMetaRef.current = {
-        firstFen: cachedAnalysis[0]?.fen || buildFenList(moves)[0] || null,
+      if (cachedAnalysis) {
+        analysisMetaRef.current = {
+          firstFen: cachedAnalysis[0]?.fen || buildFenList(moves)[0] || null,
+          depth: REVIEW_ANALYSIS_DEPTH
+        };
+        gameAnalysisRef.current = cachedAnalysis;
+        setGameAnalysis(cachedAnalysis);
+        setView('REVIEW');
+        return;
+      }
+
+      setAnalysisLoadingState({
+        roomCode: gameToAnalyze.room_code,
+        current: 0,
+        total: moves.length,
         depth: REVIEW_ANALYSIS_DEPTH
-      };
-      gameAnalysisRef.current = cachedAnalysis;
-      setGameAnalysis(cachedAnalysis);
-      setView('REVIEW');
-      return;
-    }
+      });
+      setView('ANALYZING');
 
-    setAnalysisLoadingState({
-      roomCode: gameToAnalyze.room_code,
-      current: 0,
-      total: moves.length,
-      depth: REVIEW_ANALYSIS_DEPTH
+      runAutoAnalysis(reviewBoard, {
+        gameId: gameToAnalyze.id,
+        targetDepth: REVIEW_ANALYSIS_DEPTH
+      }).then((positions) => {
+        if (reviewLoadTokenRef.current !== reviewRequestId) return;
+        gameAnalysisRef.current = positions;
+        setGameAnalysis([...positions]);
+        setAnalysisLoadingState(null);
+        setView('REVIEW');
+      });
     });
-    setView('ANALYZING');
 
-    runAutoAnalysis(reviewBoard, {
-      gameId: gameToAnalyze.id,
-      targetDepth: REVIEW_ANALYSIS_DEPTH
-    }).then((positions) => {
-      if (reviewLoadTokenRef.current !== reviewRequestId) return;
-      gameAnalysisRef.current = positions;
-      setGameAnalysis([...positions]);
-      setAnalysisLoadingState(null);
-      setView('REVIEW');
-    });
+    return () => window.cancelAnimationFrame(frameId);
   }, [pastGames, pendingAnalysisId]);
 
   // Live Spectator Analysis Trigger
@@ -928,43 +931,6 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (view !== 'ANALYZING' || !analysisProgress) return;
-
-    setAnalysisLoadingState((prev) => {
-      if (!prev) return prev;
-      return {
-        ...prev,
-        current: analysisProgress.current,
-        total: analysisProgress.total,
-        depth: analysisProgress.depth || prev.depth
-      };
-    });
-  }, [analysisProgress, view]);
-
-  useEffect(() => {
-    const fen = getViewedFEN();
-    if (!fen) {
-      setAnalysisLines([]);
-      return;
-    }
-
-    const storedEntry = getViewedAnalysisEntry();
-    if (storedEntry?.fen === fen && Array.isArray(storedEntry.topLines)) {
-      setAnalysisLines(storedEntry.topLines);
-      return;
-    }
-
-    if (analysisCache[fen]) {
-      setAnalysisLines(analysisCache[fen]);
-      return;
-    }
-
-    if (!isAnalyzing) {
-      setAnalysisLines([]);
-    }
-  }, [analysisCache, board, gameAnalysis, historyIndex, isAnalyzing, view]);
-
-  useEffect(() => {
     if (view !== 'SPECTATING' || historyIndex !== -1 || board.history.length === 0) return;
 
     const fen = getViewedFEN();
@@ -978,12 +944,14 @@ function App() {
     }
 
     const analyzer = positionAnalyzerRef.current;
-    setIsAnalyzing(true);
-    if (analysisCache[fen]) {
-      setAnalysisLines(analysisCache[fen]);
-    } else {
-      setAnalysisLines([]);
-    }
+    const startId = window.requestAnimationFrame(() => {
+      setIsAnalyzing(true);
+      if (analysisCache[fen]) {
+        setAnalysisLines(analysisCache[fen]);
+      } else {
+        setAnalysisLines([]);
+      }
+    });
 
     analyzer.onAnalysisUpdate = (lines) => {
       if (positionAnalysisTokenRef.current !== token) return;
@@ -1000,6 +968,7 @@ function App() {
     analyzer.analyzePosition(fen, ANALYSIS_LINE_COUNT, LIVE_ANALYSIS_DEPTH);
 
     return () => {
+      window.cancelAnimationFrame(startId);
       if (positionAnalysisTokenRef.current === token) {
         positionAnalysisTokenRef.current += 1;
         analyzer.stopAnalysis();
@@ -1211,8 +1180,9 @@ function App() {
   }
 
   if (view === 'ANALYZING') {
-    const totalPositions = analysisLoadingState?.total || 0;
-    const completedPositions = Math.min(analysisLoadingState?.current || 0, totalPositions);
+    const totalPositions = analysisProgress?.total || analysisLoadingState?.total || 0;
+    const completedPositions = Math.min(analysisProgress?.current ?? analysisLoadingState?.current ?? 0, totalPositions);
+    const analysisDepth = analysisProgress?.depth || analysisLoadingState?.depth || REVIEW_ANALYSIS_DEPTH;
     const progressPercent = totalPositions > 0 ? (completedPositions / totalPositions) * 100 : 0;
 
     return (
@@ -1233,7 +1203,7 @@ function App() {
           </div>
 
           <div className="analysis-loading-meta">
-            <span>Depth {analysisLoadingState?.depth || REVIEW_ANALYSIS_DEPTH}</span>
+            <span>Depth {analysisDepth}</span>
             <span>
               {totalPositions > 0
                 ? `Position ${Math.min(completedPositions + 1, totalPositions)} / ${totalPositions}`
@@ -1316,10 +1286,21 @@ function App() {
   const isSpectating = view === 'SPECTATING';
   const isVsCPU = view === 'VS_CPU';
   const isReview = view === 'REVIEW';
+  const isLiveMultiplayer = view === 'GAME';
   const isMyTurn = board.turn === playerColor;
+  const viewedFen = getViewedFEN();
   const currentAnalysisEntry = getViewedAnalysisEntry();
-  const currentBestMove = analysisLines[0]?.bestMove || analysisLines[0]?.moves?.[0] || currentAnalysisEntry?.bestMove || null;
-  const showAnalysisPanel = isReview || isVsCPU || isSpectating || historyIndex !== -1 || isAnalyzing || analysisLines.length > 0;
+  const storedAnalysisLines = currentAnalysisEntry?.fen === viewedFen && Array.isArray(currentAnalysisEntry?.topLines)
+    ? currentAnalysisEntry.topLines
+    : null;
+  const cachedAnalysisLines = viewedFen ? analysisCache[viewedFen] : null;
+  const displayedAnalysisLines = storedAnalysisLines || cachedAnalysisLines || analysisLines;
+  const currentBestMove = displayedAnalysisLines[0]?.bestMove || displayedAnalysisLines[0]?.moves?.[0] || currentAnalysisEntry?.bestMove || null;
+  const canAnalyzeCurrentView = isReview || isVsCPU || isSpectating;
+  const showAnalysisPanel = canAnalyzeCurrentView;
+  const showSpectatorButton = isLiveMultiplayer;
+  const showInlineAnalyzeButton = canAnalyzeCurrentView;
+  const showAnalysisActions = showSpectatorButton || showInlineAnalyzeButton;
 
   const statusText = board.gameStatus === 'checkmate'
     ? `Checkmate! ${board.turn === 'white' ? 'Black' : 'White'} wins!`
@@ -1346,15 +1327,10 @@ function App() {
       <div className="game-wrapper">
         <div className="game-header">
           <div className="room-badge">{isReview ? '📜 Review' : isSpectating ? '📡 Spectating' : isVsCPU ? '🤖 vs Stockfish' : `Room ${roomCode}`}</div>
-          {view === 'GAME' && (
-            <button className="btn-ghost" onClick={() => window.open(`/?spectate=${roomCode}`, '_blank')} style={{ fontSize: '11px', padding: '4px 8px', marginLeft: 'auto' }}>
-              🔍 Live Spectator Analysis
-            </button>
-          )}
           <div className={`status-bar ${statusClass}`} style={{ marginLeft: view === 'GAME' ? '8px' : 'auto' }}>{statusText}</div>
         </div>
         <div className="board" style={{ position: 'relative' }}>
-          <AnalysisArrows />
+          <AnalysisArrows analysisLines={displayedAnalysisLines} playerColor={playerColor} />
           {boardRows}
         </div>
         <div className="controls">
@@ -1433,23 +1409,28 @@ function App() {
           })}
         </div>
 
-        {/* Analysis button — show in review mode, or when viewing history in any game */}
-        {(isReview || isVsCPU || isSpectating || historyIndex !== -1) && (
+        {showAnalysisActions && (
           <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <button className="btn-ghost" onClick={handleAnalyze} disabled={isAnalyzing} style={{ fontSize: '13px', padding: '8px' }}>
-              {isAnalyzing ? 'Analyzing Position…' : '🔍 Refresh Top 5 Here'}
-            </button>
+            {showInlineAnalyzeButton && (
+              <button className="btn-ghost" onClick={handleAnalyze} disabled={isAnalyzing} style={{ fontSize: '13px', padding: '8px' }}>
+                {isAnalyzing ? 'Analyzing Position…' : '🔍 Refresh Top 5 Here'}
+              </button>
+            )}
             <button className="btn-blue"
               onClick={() => {
-                const analysisId = savedGameId;
-                if (analysisId) {
-                  window.open('/?analysis=' + analysisId, '_blank');
-                } else {
+                if (isLiveMultiplayer) {
                   window.open('/?spectate=' + roomCode, '_blank');
+                } else {
+                  const analysisId = savedGameId;
+                  if (analysisId) {
+                    window.open('/?analysis=' + analysisId, '_blank');
+                  } else {
+                    window.open('/?spectate=' + roomCode, '_blank');
+                  }
                 }
               }}
               style={{ fontSize: '13px', padding: '8px' }}>
-              📊 Analyze Full Game in New Tab
+              {isLiveMultiplayer ? 'See Game as Spectator' : '📊 Analyze Full Game in New Tab'}
             </button>
           </div>
         )}
@@ -1464,7 +1445,7 @@ function App() {
                 <strong>{currentBestMove}</strong>
               </div>
             )}
-            {analysisLines.length > 0 ? analysisLines.map((line, i) => (
+            {displayedAnalysisLines.length > 0 ? displayedAnalysisLines.map((line, i) => (
               <div key={i} className="analysis-line">
                 <span className="analysis-rank">#{i + 1}</span>
                 <span className="analysis-score">{line.score}</span>
