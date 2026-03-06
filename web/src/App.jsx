@@ -277,6 +277,7 @@ function App() {
     sf.onBestMove = (uciMove, stats) => {
       const from = uciMove.substring(0, 2);
       const to = uciMove.substring(2, 4);
+      let updatedB = null;
       setBoard(prevBoard => {
         const b = new Board();
         b.pieces = prevBoard.clonePieces();
@@ -309,9 +310,14 @@ function App() {
           setCpuThinking(false);
         }
 
+        updatedB = b;
         return b;
       });
       setCpuThinking(false);
+
+      if (updatedB && updatedB.gameStatus !== 'active') {
+        saveCpuGame(updatedB);
+      }
     };
     stockfishRef.current = sf;
   };
@@ -565,17 +571,10 @@ function App() {
                       setGameAnalysis([]);
                       setAnalysisProgress(null);
 
-                      const reviewBoard = new Board();
-                      reviewBoard.history = moves;
-                      if (moves.length > 0) {
-                        reviewBoard.pieces = moves[moves.length - 1].pieces;
-                      }
-                      reviewBoard.gameStatus = 'finished';
-                      setBoard(reviewBoard);
-                      setPlayerColor('white');
-                      setRoomCode(game.room_code);
+                      // Trigger URL navigation which the useEffect picks up
+                      window.history.pushState({}, '', '/?analysis=' + game.id);
+                      setPendingAnalysisId(game.id);
                       setView('REVIEW');
-                      setHistoryIndex(-1);
                       setAnalysisLines([]);
                       setIsAnalyzing(false);
                     }}>
