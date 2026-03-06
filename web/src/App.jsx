@@ -797,6 +797,8 @@ function App() {
 
     const frameId = window.requestAnimationFrame(() => {
       resetAnalysisState();
+      resetMultiplayerState();
+      setReviewGameMeta(gameToAnalyze);
       setRoomCode(gameToAnalyze.room_code);
       setSavedGameId(gameToAnalyze.id);
       setPlayerColor('spectator');
@@ -856,11 +858,32 @@ function App() {
 
   const handleCancelFindGame = () => {
     socket.emit('cancel_find_game');
+    resetMultiplayerState();
     setView('LOBBY');
+  };
+
+  const handleReturnToLobby = () => {
+    if (view === 'SEARCHING') {
+      socket.emit('cancel_find_game');
+    }
+    if (view === 'VS_CPU') {
+      saveCpuGame(board);
+    }
+
+    destroyEngine(stockfishRef);
+    resetAnalysisState();
+    resetMultiplayerState();
+    setSavedGameId(null);
+    setHistoryIndex(-1);
+    setRoomCode('');
+    setBoard(new Board());
+    setView('LOBBY');
+    window.history.pushState({}, '', '/');
   };
 
   const handlePlayCPU = () => {
     resetAnalysisState();
+    resetMultiplayerState();
     setSavedGameId(null);
     socket.emit('create_cpu_game');
     const newBoard = new Board();
@@ -886,6 +909,17 @@ function App() {
 
   const handleFindGame = () => {
     socket.emit('find_game', { profile: userProfile });
+  };
+
+  const handleSurrender = () => {
+    if (!window.confirm('Are you sure you want to surrender this game?')) {
+      return;
+    }
+    socket.emit('resign_game', { code: roomCode });
+  };
+
+  const handleOfferDraw = () => {
+    socket.emit('offer_draw', { code: roomCode });
   };
 
   const saveProfile = () => {
@@ -977,7 +1011,13 @@ function App() {
 
           // Trigger save if game ended in multiplayer
           if (!isVsCPU && updatedBoard.gameStatus !== 'active') {
-            socket.emit('save_multiplayer_game', { code: roomCode, history: updatedBoard.history });
+            const resultPayload = buildMultiplayerResultPayload(updatedBoard);
+            setGameEndState(resultPayload);
+            socket.emit('save_multiplayer_game', {
+              code: roomCode,
+              history: updatedBoard.history,
+              result: resultPayload
+            });
           }
 
           // If vs CPU, ask Stockfish or save if game over
@@ -1165,7 +1205,7 @@ function App() {
 
   if (!userProfile.name) {
     return (
-      <div id="app-root">
+      <div className="app-shell">
         <IdentityModal
           tempProfile={tempProfile}
           setTempProfile={setTempProfile}
@@ -1179,13 +1219,15 @@ function App() {
   // ──────── LOBBY ────────
   if (view === 'LOBBY') {
     return (
-      <div className="chess-container" style={{ maxWidth: '900px' }}>
-        <h1>
-          <span className="icon">♟️</span> Cyber Chess
-        </h1>
-        <p className="subtitle">Secure Neural Link Established</p>
+      <div className="app-shell">
+        <AppLogo onClick={handleReturnToLobby} />
+        <div className="chess-container" style={{ maxWidth: '900px' }}>
+          <h1>
+            <span className="icon">♟️</span> Cyber Chess
+          </h1>
+          <p className="subtitle">Secure Neural Link Established</p>
 
-        <div className="lobby-grid">
+          <div className="lobby-grid">
           <div className="card">
             <span className="card-icon">⚡</span>
             <h2>Quick Match</h2>
@@ -1283,9 +1325,16 @@ function App() {
                 pastGames.map(game => {
                   const moves = game.moves ? JSON.parse(game.moves) : [];
                   const moveCount = Math.max(0, moves.length - 1);
+                  const gameName = game.game_name || `Game ${game.room_code}`;
+                  const whitePlayer = crownName(game.white_name, game.winner_color, 'white');
+                  const blackPlayer = crownName(game.black_name, game.winner_color, 'black');
                   return (
-                    <div key={game.id} className="list-item" onClick={() => window.open(`/?analysis=${game.id}`, '_blank')}>
-                      <span>{game.room_code} · {moveCount} moves</span>
+                    <div key={game.id} className="list-item past-game-item" onClick={() => window.open(`/?analysis=${game.id}`, '_blank')}>
+                      <div className="past-game-main">
+                        <span className="past-game-title">{gameName}</span>
+                        <span className="past-game-players">{whitePlayer} vs {blackPlayer}</span>
+                        <span className="past-game-outcome">{formatGameOutcome(game)} · {moveCount} moves</span>
+                      </div>
                       <span className="badge">{(new Date(game.ended_at)).toLocaleDateString()}</span>
                     </div>
                   );
@@ -1293,9 +1342,10 @@ function App() {
               }
             </div>
           </div>
-        </div>
+          </div>
 
-        {errorStatus && <p className="error">{errorStatus}</p>}
+          {errorStatus && <p className="error">{errorStatus}</p>}
+        </div>
       </div>
     );
   }
@@ -1303,11 +1353,14 @@ function App() {
   // ──────── WAITING ────────
   if (view === 'WAITING') {
     return (
-      <div className="chess-container">
-        <h1>Waiting for Opponent</h1>
-        <p className="subtitle">Share this code with a friend</p>
-        <div className="room-code-display">{roomCode}</div>
-        <p className="loading-pulse">Waiting for opponent to join…</p>
+      <div className="app-shell">
+        <AppLogo onClick={handleReturnToLobby} />
+        <div className="chess-container">
+          <h1>Waiting for Opponent</h1>
+          <p className="subtitle">Share this code with a friend</p>
+          <div className="room-code-display">{roomCode}</div>
+          <p className="loading-pulse">Waiting for opponent to join…</p>
+        </div>
       </div>
     );
   }
@@ -1315,12 +1368,15 @@ function App() {
   // ──────── SEARCHING ────────
   if (view === 'SEARCHING') {
     return (
-      <div className="chess-container">
-        <h1>Matchmaking</h1>
-        <p className="subtitle">Looking for an opponent…</p>
-        <div className="search-icon">♟</div>
-        <p className="loading-pulse">Searching…</p>
-        <button className="btn-red" onClick={handleCancelFindGame} style={{ marginTop: '20px' }}>Cancel Search</button>
+      <div className="app-shell">
+        <AppLogo onClick={handleReturnToLobby} />
+        <div className="chess-container">
+          <h1>Matchmaking</h1>
+          <p className="subtitle">Looking for an opponent…</p>
+          <div className="search-icon">♟</div>
+          <p className="loading-pulse">Searching…</p>
+          <button className="btn-red" onClick={handleCancelFindGame} style={{ marginTop: '20px' }}>Cancel Search</button>
+        </div>
       </div>
     );
   }
@@ -1332,34 +1388,37 @@ function App() {
     const progressPercent = totalPositions > 0 ? (completedPositions / totalPositions) * 100 : 0;
 
     return (
-      <div className="chess-container analysis-loading-view">
-        <h1>Analyzing Game</h1>
-        <p className="subtitle">
-          {analysisLoadingState?.roomCode
-            ? `Preparing cached review for ${analysisLoadingState.roomCode}`
-            : 'Preparing cached review'}
-        </p>
-
-        <div className="analysis-loading-card">
-          <div className="analysis-loading-spinner" />
-          <p className="loading-pulse">Running Stockfish through every position…</p>
-
-          <div className="analysis-progress-container analysis-loading-progress">
-            <div className="analysis-progress-bar" style={{ width: `${progressPercent}%` }} />
-          </div>
-
-          <div className="analysis-loading-meta">
-            <span>Depth {analysisDepth}</span>
-            <span>
-              {totalPositions > 0
-                ? `Position ${Math.min(completedPositions + 1, totalPositions)} / ${totalPositions}`
-                : 'Starting engine…'}
-            </span>
-          </div>
-
-          <p className="analysis-loading-note">
-            The finished move-by-move analysis is saved so the next viewer can open it instantly.
+      <div className="app-shell">
+        <AppLogo onClick={handleReturnToLobby} />
+        <div className="chess-container analysis-loading-view">
+          <h1>Analyzing Game</h1>
+          <p className="subtitle">
+            {analysisLoadingState?.roomCode
+              ? `Preparing cached review for ${analysisLoadingState.roomCode}`
+              : 'Preparing cached review'}
           </p>
+
+          <div className="analysis-loading-card">
+            <div className="analysis-loading-spinner" />
+            <p className="loading-pulse">Running Stockfish through every position…</p>
+
+            <div className="analysis-progress-container analysis-loading-progress">
+              <div className="analysis-progress-bar" style={{ width: `${progressPercent}%` }} />
+            </div>
+
+            <div className="analysis-loading-meta">
+              <span>Depth {analysisDepth}</span>
+              <span>
+                {totalPositions > 0
+                  ? `Position ${Math.min(completedPositions + 1, totalPositions)} / ${totalPositions}`
+                  : 'Starting engine…'}
+              </span>
+            </div>
+
+            <p className="analysis-loading-note">
+              The finished move-by-move analysis is saved so the next viewer can open it instantly.
+            </p>
+          </div>
         </div>
       </div>
     );
@@ -1440,18 +1499,32 @@ function App() {
     ? currentAnalysisEntry.topLines
     : null;
   const cachedAnalysisLines = viewedFen ? analysisCache[viewedFen] : null;
-  const displayedAnalysisLines = storedAnalysisLines || cachedAnalysisLines || analysisLines;
+  const displayedAnalysisLines = (storedAnalysisLines || cachedAnalysisLines || analysisLines).slice(0, ANALYSIS_LINE_COUNT);
   const currentBestMove = displayedAnalysisLines[0]?.bestMove || displayedAnalysisLines[0]?.moves?.[0] || currentAnalysisEntry?.bestMove || null;
   const canAnalyzeCurrentView = isReview || isVsCPU || isSpectating;
   const showAnalysisPanel = canAnalyzeCurrentView;
   const showSpectatorButton = isLiveMultiplayer;
   const showInlineAnalyzeButton = canAnalyzeCurrentView;
   const showAnalysisActions = showSpectatorButton || showInlineAnalyzeButton;
+  const precisionStats = gameAnalysis.length > 1 ? buildPrecisionStats(board.history, gameAnalysis) : null;
+  const persistedOutcome = reviewGameMeta ? {
+    result: reviewGameMeta.result,
+    winnerColor: reviewGameMeta.winner_color,
+    termination: reviewGameMeta.termination
+  } : null;
+  const outcomeState = gameEndState || persistedOutcome;
+  const outcomeWinnerText = outcomeState?.winnerColor === 'white' ? 'White' : outcomeState?.winnerColor === 'black' ? 'Black' : null;
 
-  const statusText = board.gameStatus === 'checkmate'
-    ? `Checkmate! ${board.turn === 'white' ? 'Black' : 'White'} wins!`
+  const statusText = outcomeState?.termination === 'resignation'
+    ? `${outcomeWinnerText} wins by surrender`
+    : outcomeState?.termination === 'draw_agreement'
+      ? 'Tablas agreed'
+    : board.gameStatus === 'checkmate'
+      ? `Checkmate! ${board.turn === 'white' ? 'Black' : 'White'} wins!`
     : board.gameStatus === 'stalemate'
       ? 'Stalemate \u2014 Draw!'
+      : board.gameStatus === 'draw'
+        ? 'Tablas'
       : isReview
         ? (historyIndex === -1 ? 'Review Ready' : 'Reviewing Position')
       : cpuThinking
@@ -1469,7 +1542,9 @@ function App() {
       : isMyTurn && !isSpectating ? '' : 'opponent-turn';
 
   return (
-    <div className="chess-container game-layout">
+    <div className="app-shell">
+      <AppLogo onClick={handleReturnToLobby} />
+      <div className="chess-container game-layout">
       <div className="game-wrapper">
         <div className="game-header">
           <div className="room-badge">{isReview ? '📜 Review' : isSpectating ? '📡 Spectating' : isVsCPU ? '🤖 vs Stockfish' : `Room ${roomCode}`}</div>
@@ -1481,20 +1556,37 @@ function App() {
         </div>
         <div className="controls">
           <p>{isReview ? <b>Game Review</b> : isSpectating ? <b>Observer Mode</b> : isVsCPU ? <>You (White) vs <b>Stockfish</b></> : <>Playing as <b>{playerColor}</b></>}</p>
-          <button className="btn-red" onClick={() => {
-            if (isVsCPU) saveCpuGame(board);
-            destroyEngine(stockfishRef);
-            resetAnalysisState();
-            setSavedGameId(null);
-            setHistoryIndex(-1);
-            setView('LOBBY');
-            setBoard(new Board());
-          }}>Leave</button>
+          <div className="control-actions">
+            {isLiveMultiplayer && board.gameStatus === 'active' && (
+              <>
+                <button className="btn-orange" onClick={handleOfferDraw} disabled={drawOfferState === 'sent'}>
+                  {drawOfferState === 'sent' ? 'Tablas Offered' : 'Offer Tablas'}
+                </button>
+                <button className="btn-red" onClick={handleSurrender}>Surrender</button>
+              </>
+            )}
+            <button className="btn-red" onClick={handleReturnToLobby}>Leave</button>
+          </div>
         </div>
       </div>
 
       <div className="history-panel">
         <h3>Moves</h3>
+
+        {precisionStats && (
+          <div className="precision-grid">
+            <div className="precision-card">
+              <span className="precision-label">White Precision</span>
+              <strong>{precisionStats.white.precision.toFixed(1)}%</strong>
+              <span className="precision-meta">{precisionStats.white.averageLoss.toFixed(2)} eval loss / move</span>
+            </div>
+            <div className="precision-card">
+              <span className="precision-label">Black Precision</span>
+              <strong>{precisionStats.black.precision.toFixed(1)}%</strong>
+              <span className="precision-meta">{precisionStats.black.averageLoss.toFixed(2)} eval loss / move</span>
+            </div>
+          </div>
+        )}
 
         {/* Evaluation Chart */}
         {gameAnalysis.length > 0 && (
@@ -1559,7 +1651,7 @@ function App() {
           <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {showInlineAnalyzeButton && (
               <button className="btn-ghost" onClick={handleAnalyze} disabled={isAnalyzing} style={{ fontSize: '13px', padding: '8px' }}>
-                {isAnalyzing ? 'Analyzing Position…' : '🔍 Refresh Top 5 Here'}
+                {isAnalyzing ? 'Analyzing Position…' : '🔍 Refresh Top 3 Here'}
               </button>
             )}
             <button className="btn-blue"
@@ -1584,7 +1676,7 @@ function App() {
         {/* Analysis results */}
         {showAnalysisPanel && (
           <div className="analysis-panel">
-            <h4>Top 5 Engine Lines {isAnalyzing && <span className="loading-dot">●</span>}</h4>
+            <h4>Top 3 Engine Lines {isAnalyzing && <span className="loading-dot">●</span>}</h4>
             {currentBestMove && (
               <div className="analysis-summary">
                 <span>Best move</span>
@@ -1605,6 +1697,7 @@ function App() {
             )}
           </div>
         )}
+      </div>
       </div>
     </div>
   );
