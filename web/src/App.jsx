@@ -32,11 +32,15 @@ function App() {
   const [historyIndex, setHistoryIndex] = useState(-1);
 
   // Multiplayer states
-  const [view, setView] = useState('LOBBY'); // LOBBY, WAITING, SEARCHING, GAME
+  const [view, setView] = useState('LOBBY'); // LOBBY, WAITING, SEARCHING, GAME, SPECTATING
   const [roomCode, setRoomCode] = useState('');
   const [joinCodeInput, setJoinCodeInput] = useState('');
   const [playerColor, setPlayerColor] = useState(null);
   const [errorStatus, setErrorStatus] = useState('');
+
+  // Game explorer
+  const [liveGames, setLiveGames] = useState([]);
+  const [pastGames, setPastGames] = useState([]);
 
   useEffect(() => {
     socket.on('game_created', ({ code, color }) => {
@@ -64,6 +68,30 @@ function App() {
       setTimeout(() => setErrorStatus(''), 3000);
     });
 
+    socket.on('spectator_joined', ({ code, history }) => {
+      setRoomCode(code);
+      setPlayerColor('spectator');
+
+      // Reconstruct board from history
+      const newBoard = new Board();
+      if (history && history.length > 0) {
+        newBoard.history = history;
+        newBoard.pieces = history[history.length - 1].pieces;
+        // Estimate turn based on history length (White moves first)
+        newBoard.turn = history.length % 2 === 1 ? 'white' : 'black';
+      }
+      setBoard(newBoard);
+      setView('SPECTATING');
+    });
+
+    socket.on('live_games_list', (games) => {
+      setLiveGames(games);
+    });
+
+    socket.on('past_games_list', (games) => {
+      setPastGames(games);
+    });
+
     socket.on('opponent_move', ({ startPos, endPos }) => {
       setBoard(prevBoard => {
         const newBoard = Object.assign(Object.create(Object.getPrototypeOf(prevBoard)), prevBoard);
@@ -84,11 +112,22 @@ function App() {
       socket.off('game_joined');
       socket.off('game_start');
       socket.off('waiting_for_match');
+      socket.off('spectator_joined');
+      socket.off('live_games_list');
+      socket.off('past_games_list');
       socket.off('join_error');
       socket.off('opponent_move');
       socket.off('opponent_disconnected');
     };
   }, []);
+
+  // Fetch games when entering lobby
+  useEffect(() => {
+    if (view === 'LOBBY') {
+      socket.emit('get_live_games');
+      socket.emit('get_past_games');
+    }
+  }, [view]);
 
   const handleCreateGame = () => {
     socket.emit('create_game');
@@ -108,6 +147,7 @@ function App() {
   const handleSquareClick = (pos) => {
     if (view !== 'GAME') return; // Only allow clicks in active game
     if (historyIndex !== -1) return; // Cannot play moves from the past!
+    if (playerColor === 'spectator') return; // Spectators cannot move
     if (board.turn !== playerColor) return; // Only allow clicks on our turn
 
     if (selectedPos) {
@@ -115,8 +155,9 @@ function App() {
         // Perform local move
         const success = board.movePiece(selectedPos, pos);
         if (success) {
+          const newHistoryItem = board.history[board.history.length - 1]; // get the item just pushed
           // Emit move to server
-          socket.emit('make_move', { code: roomCode, startPos: selectedPos, endPos: pos });
+          socket.emit('make_move', { code: roomCode, startPos: selectedPos, endPos: pos, newHistoryItem });
 
           setBoard(Object.assign(Object.create(Object.getPrototypeOf(board)), board));
           setSelectedPos(null);
@@ -140,7 +181,7 @@ function App() {
   };
 
   const renderSquare = (c, r) => {
-    // If playing Black, render the board from Black's perspective
+    // If playing Black, render the board from Black's perspective. Specs and White see normally.
     const displayR = playerColor === 'black' ? r : 7 - r;
     const displayC = playerColor === 'black' ? 7 - c : c;
 
@@ -172,24 +213,69 @@ function App() {
 
   if (view === 'LOBBY') {
     return (
-      <div className="chess-container lobby">
-        <h1>Chess Multiplayer</h1>
-        <button className="primary-btn" onClick={handleFindGame} style={{ marginBottom: '15px', background: '#27ae60' }}>
-          Find Random Match
-        </button>
-        <div className="divider" style={{ margin: '10px 0' }}><span>OR PLAY WITH A FRIEND</span></div>
-        <button className="primary-btn" onClick={handleCreateGame}>Create Game</button>
-        <div className="divider"><span>OR</span></div>
-        <form onSubmit={handleJoinGame} className="join-form">
-          <input
-            type="text"
-            placeholder="3-Letter Code"
-            maxLength={3}
-            value={joinCodeInput}
-            onChange={(e) => setJoinCodeInput(e.target.value.toUpperCase())}
-          />
-          <button type="submit" className="secondary-btn">Join Game</button>
-        </form>
+      <div className="chess-container" style={{ maxWidth: '900px' }}>
+        <h1 style={{ fontSize: '40px', marginBottom: '40px' }}>Chess App</h1>
+
+        <div className="lobby-grid">
+          {/* Card 1: Random Game */}
+          <div className="card">
+            <h2>Quick Match</h2>
+            <p>Find a random opponent instantly.</p>
+            <button className="primary-btn" onClick={handleFindGame} style={{ background: '#27ae60' }}>
+              Find Random Match
+            </button>
+          </div>
+
+          {/* Card 2: Play with Friend */}
+          <div className="card">
+            <h2>Play with Friend</h2>
+            <p>Create a room or join one.</p>
+            <button className="primary-btn" onClick={handleCreateGame} style={{ marginBottom: '10px' }}>Create Game</button>
+            <form onSubmit={handleJoinGame} className="join-form">
+              <input
+                type="text"
+                placeholder="Code"
+                maxLength={3}
+                value={joinCodeInput}
+                onChange={(e) => setJoinCodeInput(e.target.value.toUpperCase())}
+              />
+              <button type="submit" className="secondary-btn">Join Game</button>
+            </form>
+          </div>
+
+          {/* Card 3: Live Games */}
+          <div className="card list-card">
+            <h2>Live Games (Spectate)</h2>
+            <p>Watch active games.</p>
+            <div className="item-list">
+              {liveGames.length === 0 ? <p className="empty-msg">No active games.</p> :
+                liveGames.map(game => (
+                  <div key={game.code} className="list-item" onClick={() => socket.emit('spectate_game', game.code)}>
+                    <span>Room {game.code}</span>
+                    <span className="badge">{game.moves} moves</span>
+                  </div>
+                ))
+              }
+            </div>
+          </div>
+
+          {/* Card 4: Past Games */}
+          <div className="card list-card">
+            <h2>Past Games</h2>
+            <p>Review finished games.</p>
+            <div className="item-list">
+              {pastGames.length === 0 ? <p className="empty-msg">No past games yet.</p> :
+                pastGames.map(game => (
+                  <div key={game.id} className="list-item">
+                    <span>Room {game.room_code}</span>
+                    <span className="badge">{(new Date(game.ended_at)).toLocaleDateString()}</span>
+                  </div>
+                ))
+              }
+            </div>
+          </div>
+
+        </div>
         {errorStatus && <p className="error">{errorStatus}</p>}
       </div>
     );
@@ -234,21 +320,24 @@ function App() {
     setLegalMoves([]);
   };
 
+  const isSpectating = view === 'SPECTATING';
+
   return (
     <div className="chess-container" style={{ flexDirection: 'row', alignItems: 'flex-start', maxWidth: '850px', justifyContent: 'space-between' }}>
 
       <div className="game-wrapper">
         <div className="game-header">
-          <div className="room-badge">Room: {roomCode}</div>
+          <div className="room-badge">{isSpectating ? 'Spectating ' : 'Room: '}{roomCode}</div>
           <div className="status-bar">
-            {historyIndex !== -1 ? "Analyzing Past Move" : (board.turn === playerColor ? "Your Turn" : "Opponent's Turn")}
+            {historyIndex !== -1 ? "Analyzing Past Move" : (isSpectating ? `Turn: ${board.turn}` : (board.turn === playerColor ? "Your Turn" : "Opponent's Turn"))}
           </div>
         </div>
         <div className="board">
           {boardRows}
         </div>
         <div className="controls">
-          <p>You are playing as <b>{playerColor}</b></p>
+          <p>{isSpectating ? <b>Observer</b> : `You are playing as ${playerColor}`}</p>
+          <button onClick={() => { setView('LOBBY'); setBoard(new Board()); }} style={{ marginTop: '10px', background: '#e74c3c' }}>Leave to Lobby</button>
         </div>
       </div>
 
