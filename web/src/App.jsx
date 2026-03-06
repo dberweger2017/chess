@@ -109,6 +109,7 @@ function App() {
       setView('SPECTATING');
     });
 
+    socket.on('live_games_list', (games) => setLiveGames(games));
     socket.on('past_games_list', (games) => setPastGames(games));
     socket.on('waiting_count', (count) => setWaitingCount(count));
 
@@ -116,6 +117,7 @@ function App() {
       setRoomCode(code);
       setView('VS_CPU');
       window.history.pushState({}, '', '/?game=' + code);
+      initStockfish(code);
     });
 
     socket.on('opponent_move', ({ startPos, endPos }) => {
@@ -379,10 +381,11 @@ function App() {
     setBoard(newBoard);
     setPlayerColor('white');
     setRoomCode('CPU (WAITING...)');
-    // We set view to VS_CPU only after receiving the server code
     setEngineStats({});
+  };
 
-    // Initialize Stockfish
+  const initStockfish = (code) => {
+    // Initialize Stockfish with a specific room code
     if (stockfishRef.current) stockfishRef.current.destroy();
     const sf = new StockfishEngine();
     sf.setMode(cpuMode);
@@ -403,9 +406,9 @@ function App() {
         b.gameStatus = prevBoard.gameStatus;
         b.movePiece(from, to);
 
-        // Sync CPU move to server room
+        // Sync CPU move to server room using the code passed to initStockfish
         const newHistoryItem = b.history[b.history.length - 1];
-        socket.emit('make_move', { code: roomCode, startPos: from, endPos: to, newHistoryItem });
+        socket.emit('make_move', { code: code, startPos: from, endPos: to, newHistoryItem });
 
         // Record stats for this move index
         const moveIdx = b.history.length - 1;
