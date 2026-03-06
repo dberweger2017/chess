@@ -29,6 +29,7 @@ const REVIEW_ANALYSIS_DEPTH = 10;
 const LIVE_ANALYSIS_DEPTH = 24;
 const ANALYSIS_LINE_COUNT = 3;
 const ANALYSIS_SCHEMA_VERSION = 2;
+const MAX_UI_EVAL = 12;
 
 // Connect to the Node server (using default host for reverse proxy support)
 const socket = io();
@@ -115,8 +116,14 @@ function formatGameOutcome(game) {
   return 'Finished';
 }
 
-function crownName(name, winnerColor, color) {
-  const label = name || (color === 'white' ? 'White' : 'Black');
+function formatParticipantLabel(name, winnerColor, color, currentUserName) {
+  const fallback = color === 'white' ? 'White' : 'Black';
+  const currentUser = currentUserName?.trim().toLowerCase();
+  const participant = name?.trim();
+  const label = currentUser && participant && participant.toLowerCase() === currentUser
+    ? 'YOU'
+    : (participant || fallback);
+
   return winnerColor === color ? `👑 ${label}` : label;
 }
 
@@ -132,8 +139,8 @@ function buildPrecisionStats(history, analysis) {
     if (!before || !after) continue;
 
     const mover = idx % 2 === 1 ? 'white' : 'black';
-    const expected = before.numericScore ?? 0;
-    const actual = -(after.numericScore ?? 0);
+    const expected = getComparableNumericScore(before);
+    const actual = -getComparableNumericScore(after);
     const loss = Math.max(0, expected - actual);
 
     totals[mover].loss += loss;
@@ -159,6 +166,91 @@ function buildPrecisionStats(history, analysis) {
   };
 }
 
+function getComparableNumericScore(analysisEntry) {
+  if (!analysisEntry) return 0;
+
+  if (typeof analysisEntry.score === 'string' && analysisEntry.score.startsWith('M')) {
+    return analysisEntry.score.includes('-') ? -MAX_UI_EVAL : MAX_UI_EVAL;
+  }
+
+  const numericScore = Number(analysisEntry.numericScore ?? analysisEntry.score ?? 0);
+  if (!Number.isFinite(numericScore)) return 0;
+  return clamp(numericScore, -MAX_UI_EVAL, MAX_UI_EVAL);
+}
+
+function getWhitePerspectiveEval(snapshot, analysisEntry, index) {
+  if (!analysisEntry) return null;
+  const sideToMove = getSnapshotTurn(snapshot, index);
+  const sidePerspective = getComparableNumericScore(analysisEntry);
+  return sideToMove === 'white' ? sidePerspective : -sidePerspective;
+}
+
+function formatPlyLabel(snapshot, index) {
+  if (index === 0) return 'Start';
+  const moveNumber = Math.ceil(index / 2);
+  return index % 2 === 1
+    ? `${moveNumber}. ${snapshot.move}`
+    : `${moveNumber}... ${snapshot.move}`;
+}
+
+function formatEvalLabel(whiteEval) {
+  if (whiteEval == null) return 'No eval';
+  if (Math.abs(whiteEval) < 0.05) return 'Equal';
+  return `${whiteEval > 0 ? 'White' : 'Black'} +${Math.abs(whiteEval).toFixed(2)}`;
+}
+
+function formatSwingLabel(swing) {
+  if (!Number.isFinite(swing) || Math.abs(swing) < 0.05) return 'No major swing';
+  return `${swing > 0 ? 'White' : 'Black'} ${swing > 0 ? '+' : '-'}${Math.abs(swing).toFixed(2)}`;
+}
+
+function buildEvaluationChartData(history, analysis) {
+  const pointCount = Math.min(history.length, analysis.length);
+  if (pointCount === 0) return [];
+
+  return history.slice(0, pointCount).map((snapshot, index) => {
+    const evalAfterMove = getWhitePerspectiveEval(snapshot, analysis[index], index);
+    const previousEval = index > 0
+      ? getWhitePerspectiveEval(history[index - 1], analysis[index - 1], index - 1)
+      : 0;
+    const swing = index > 0 && evalAfterMove != null && previousEval != null
+      ? evalAfterMove - previousEval
+      : 0;
+    const preMoveAnalysis = index > 0 ? analysis[index - 1] : null;
+
+    return {
+      index,
+      ply: index,
+      moveLabel: formatPlyLabel(snapshot, index),
+      moveText: index === 0 ? 'Start position' : snapshot.move,
+      eval: evalAfterMove ?? 0,
+      evalText: formatEvalLabel(evalAfterMove),
+      swing,
+      swingText: formatSwingLabel(swing),
+      score: analysis[index]?.score || '0.00',
+      bestMoveBefore: index === 0
+        ? (analysis[index]?.bestMove || null)
+        : (preMoveAnalysis?.bestMove || null)
+    };
+  });
+}
+
+function EvaluationTooltip({ active, payload }) {
+  if (!active || !payload?.length) return null;
+
+  const point = payload[0]?.payload;
+  if (!point) return null;
+
+  return (
+    <div className="evaluation-tooltip">
+      <strong>{point.moveLabel}</strong>
+      <span>{point.evalText}</span>
+      <span>{point.swingText}</span>
+      {point.bestMoveBefore && <span>Engine best before move: {point.bestMoveBefore}</span>}
+    </div>
+  );
+}
+
 function AppLogo({ onClick }) {
   return (
     <button type="button" className="app-logo" onClick={onClick}>
@@ -168,7 +260,7 @@ function AppLogo({ onClick }) {
   );
 }
 
-function AnalysisArrows({ analysisLines, playerColor }) {
+function AnalysisArrows({ analysisLines = [], playerColor }) {
   if (analysisLines.length === 0) return null;
 
   const getSquareCenter = (pos) => {
@@ -862,7 +954,10 @@ function App() {
     setView('LOBBY');
   };
 
-  const handleReturnToLobby = () => {
+  const handleReturnToLobby = (event) => {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+
     if (view === 'SEARCHING') {
       socket.emit('cancel_find_game');
     }
@@ -870,12 +965,19 @@ function App() {
       saveCpuGame(board);
     }
 
+    reviewLoadTokenRef.current += 1;
     destroyEngine(stockfishRef);
     resetAnalysisState();
     resetMultiplayerState();
     setSavedGameId(null);
+    setPendingAnalysisId(null);
     setHistoryIndex(-1);
     setRoomCode('');
+    setPlayerColor(null);
+    setSelectedPos(null);
+    setLegalMoves([]);
+    setPreMove(null);
+    setEngineStats({});
     setBoard(new Board());
     setView('LOBBY');
     window.history.pushState({}, '', '/');
@@ -1235,7 +1337,7 @@ function App() {
             <div style={{ marginBottom: '10px', fontSize: '13px', color: 'var(--text-muted)' }}>
               {waitingCount === 1 ? '1 person looking for a match' : `${waitingCount} people waiting`}
             </div>
-            <button className="btn-green" onClick={handleFindGame}>Find Match</button>
+	            <button type="button" className="btn-green" onClick={handleFindGame}>Find Match</button>
           </div>
 
           <div className="card">
@@ -1245,8 +1347,8 @@ function App() {
 
             {/* Mode toggle */}
             <div className="mode-toggle">
-              <button className={`toggle-btn ${cpuMode === 'depth' ? 'active' : ''}`} onClick={() => setCpuMode('depth')}>By Depth</button>
-              <button className={`toggle-btn ${cpuMode === 'time' ? 'active' : ''}`} onClick={() => setCpuMode('time')}>By Time</button>
+	              <button type="button" className={`toggle-btn ${cpuMode === 'depth' ? 'active' : ''}`} onClick={() => setCpuMode('depth')}>By Depth</button>
+	              <button type="button" className={`toggle-btn ${cpuMode === 'time' ? 'active' : ''}`} onClick={() => setCpuMode('time')}>By Time</button>
             </div>
 
             {cpuMode === 'depth' ? (
@@ -1277,14 +1379,14 @@ function App() {
               </div>
             )}
 
-            <button className="btn-green" onClick={handlePlayCPU} style={{ background: 'linear-gradient(135deg, #7c3aed, #8b5cf6)' }}>Start Game</button>
+	            <button type="button" className="btn-green" onClick={handlePlayCPU} style={{ background: 'linear-gradient(135deg, #7c3aed, #8b5cf6)' }}>Start Game</button>
           </div>
 
           <div className="card">
             <span className="card-icon">🤝</span>
             <h2>Play with Friend</h2>
             <p>Create a private room or join one</p>
-            <button className="btn-blue" onClick={handleCreateGame} style={{ marginBottom: '10px' }}>Create Game</button>
+	            <button type="button" className="btn-blue" onClick={handleCreateGame} style={{ marginBottom: '10px' }}>Create Game</button>
             <form onSubmit={handleJoinGame} className="join-form">
               <input
                 type="text"
@@ -1301,17 +1403,17 @@ function App() {
             <span className="card-icon">📡</span>
             <h2>Live Games</h2>
             <p>Watch active matches</p>
-            <div className="item-list">
-              {liveGames.length === 0 ? <p className="empty-msg">No active games right now</p> :
-                liveGames.map(game => (
-                  <div key={game.code} className="list-item" onClick={() => window.open(`/?spectate=${game.code}`, '_blank')}>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                      <span style={{ fontSize: '14px', fontWeight: 'bold' }}>{game.players}</span>
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Room {game.code}</span>
-                    </div>
-                    <span className="badge">{game.moves} moves</span>
-                  </div>
-                ))
+	            <div className="item-list">
+	              {liveGames.length === 0 ? <p className="empty-msg">No active games right now</p> :
+	                liveGames.map(game => (
+	                  <div key={game.code} className="list-item" onClick={() => window.open(`/?spectate=${game.code}`, '_blank')}>
+	                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+	                      <span style={{ fontSize: '14px', fontWeight: 'bold' }}>{game.players || `Room ${game.code}`}</span>
+	                      <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Room {game.code}</span>
+	                    </div>
+	                    <span className="badge">{game.moves} moves</span>
+	                  </div>
+	                ))
               }
             </div>
           </div>
@@ -1320,14 +1422,14 @@ function App() {
             <span className="card-icon">📜</span>
             <h2>Past Games</h2>
             <p>Review completed matches</p>
-            <div className="item-list">
-              {pastGames.length === 0 ? <p className="empty-msg">No past games yet</p> :
-                pastGames.map(game => {
-                  const moves = game.moves ? JSON.parse(game.moves) : [];
-                  const moveCount = Math.max(0, moves.length - 1);
-                  const gameName = game.game_name || `Game ${game.room_code}`;
-                  const whitePlayer = crownName(game.white_name, game.winner_color, 'white');
-                  const blackPlayer = crownName(game.black_name, game.winner_color, 'black');
+	            <div className="item-list past-games-list">
+	              {pastGames.length === 0 ? <p className="empty-msg">No past games yet</p> :
+	                pastGames.map(game => {
+	                  const moves = game.moves ? JSON.parse(game.moves) : [];
+	                  const moveCount = Math.max(0, moves.length - 1);
+	                  const gameName = game.game_name || `Game ${game.room_code}`;
+	                  const whitePlayer = formatParticipantLabel(game.white_name, game.winner_color, 'white', userProfile.name);
+	                  const blackPlayer = formatParticipantLabel(game.black_name, game.winner_color, 'black', userProfile.name);
                   return (
                     <div key={game.id} className="list-item past-game-item" onClick={() => window.open(`/?analysis=${game.id}`, '_blank')}>
                       <div className="past-game-main">
@@ -1375,7 +1477,7 @@ function App() {
           <p className="subtitle">Looking for an opponent…</p>
           <div className="search-icon">♟</div>
           <p className="loading-pulse">Searching…</p>
-          <button className="btn-red" onClick={handleCancelFindGame} style={{ marginTop: '20px' }}>Cancel Search</button>
+	          <button type="button" className="btn-red" onClick={handleCancelFindGame} style={{ marginTop: '20px' }}>Cancel Search</button>
         </div>
       </div>
     );
@@ -1499,7 +1601,15 @@ function App() {
     ? currentAnalysisEntry.topLines
     : null;
   const cachedAnalysisLines = viewedFen ? analysisCache[viewedFen] : null;
-  const displayedAnalysisLines = (storedAnalysisLines || cachedAnalysisLines || analysisLines).slice(0, ANALYSIS_LINE_COUNT);
+  const displayedAnalysisLines = (
+    Array.isArray(storedAnalysisLines)
+      ? storedAnalysisLines
+      : Array.isArray(cachedAnalysisLines)
+        ? cachedAnalysisLines
+        : Array.isArray(analysisLines)
+          ? analysisLines
+          : []
+  ).slice(0, ANALYSIS_LINE_COUNT);
   const currentBestMove = displayedAnalysisLines[0]?.bestMove || displayedAnalysisLines[0]?.moves?.[0] || currentAnalysisEntry?.bestMove || null;
   const canAnalyzeCurrentView = isReview || isVsCPU || isSpectating;
   const showAnalysisPanel = canAnalyzeCurrentView;
@@ -1507,6 +1617,14 @@ function App() {
   const showInlineAnalyzeButton = canAnalyzeCurrentView;
   const showAnalysisActions = showSpectatorButton || showInlineAnalyzeButton;
   const precisionStats = gameAnalysis.length > 1 ? buildPrecisionStats(board.history, gameAnalysis) : null;
+  const evaluationChartData = buildEvaluationChartData(board.history, gameAnalysis);
+  const selectedPositionIndex = getViewedPositionIndex();
+  const selectedChartPoint = evaluationChartData[selectedPositionIndex] || null;
+  const chartMaxAbsEval = clamp(
+    evaluationChartData.reduce((maxEval, point) => Math.max(maxEval, Math.abs(point.eval)), 0),
+    2,
+    MAX_UI_EVAL
+  );
   const persistedOutcome = reviewGameMeta ? {
     result: reviewGameMeta.result,
     winnerColor: reviewGameMeta.winner_color,
@@ -1559,13 +1677,13 @@ function App() {
           <div className="control-actions">
             {isLiveMultiplayer && board.gameStatus === 'active' && (
               <>
-                <button className="btn-orange" onClick={handleOfferDraw} disabled={drawOfferState === 'sent'}>
-                  {drawOfferState === 'sent' ? 'Tablas Offered' : 'Offer Tablas'}
-                </button>
-                <button className="btn-red" onClick={handleSurrender}>Surrender</button>
-              </>
-            )}
-            <button className="btn-red" onClick={handleReturnToLobby}>Leave</button>
+	                <button type="button" className="btn-orange" onClick={handleOfferDraw} disabled={drawOfferState === 'sent'}>
+	                  {drawOfferState === 'sent' ? 'Tablas Offered' : 'Offer Tablas'}
+	                </button>
+	                <button type="button" className="btn-red" onClick={handleSurrender}>Surrender</button>
+	              </>
+	            )}
+	            <button type="button" className="btn-red" onClick={handleReturnToLobby}>Leave</button>
           </div>
         </div>
       </div>
@@ -1588,24 +1706,53 @@ function App() {
           </div>
         )}
 
-        {/* Evaluation Chart */}
-        {gameAnalysis.length > 0 && (
-          <div className="evaluation-chart" style={{ height: '100px', marginBottom: '12px', background: 'rgba(0,0,0,0.2)', padding: '5px', borderRadius: '8px' }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={gameAnalysis}>
-                <YAxis domain={[-10, 10]} hide />
-                <Tooltip
-                  cursor={{ stroke: 'rgba(255,255,255,0.1)' }}
-                  contentStyle={{ backgroundColor: '#1e1e2f', border: '1px solid #333', fontSize: '11px', borderRadius: '4px' }}
-                  labelFormatter={(idx) => `Move ${idx}`}
-                  formatter={(value) => [Number(value).toFixed(2), 'Eval']}
-                />
-                <ReferenceLine y={0} stroke="#444" strokeDasharray="3 3" />
-                <Line type="monotone" dataKey="numericScore" stroke="#8b5cf6" strokeWidth={2} dot={false} isAnimationActive={false} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        )}
+	        {evaluationChartData.length > 0 && (
+	          <div className="evaluation-chart-card">
+	            <div className="evaluation-chart-head">
+	              <div>
+	                <h4>Winning Trend</h4>
+	                <span className="evaluation-subtitle">Positive values mean White is better</span>
+	              </div>
+	              {selectedChartPoint && (
+	                <span className="evaluation-pill">{selectedChartPoint.evalText}</span>
+	              )}
+	            </div>
+	            <div className="evaluation-chart-scale">
+	              <span>White better</span>
+	              <span>Black better</span>
+	            </div>
+	            <div className="evaluation-chart">
+	              <ResponsiveContainer width="100%" height="100%">
+	                <LineChart
+	                  data={evaluationChartData}
+	                  onClick={(state) => {
+	                    const nextIndex = state?.activeTooltipIndex;
+	                    if (typeof nextIndex === 'number' && evaluationChartData[nextIndex]) {
+	                      handleHistoryClick(evaluationChartData[nextIndex].index);
+	                    }
+	                  }}
+	                >
+	                  <XAxis dataKey="ply" hide />
+	                  <YAxis domain={[-chartMaxAbsEval, chartMaxAbsEval]} hide />
+	                  <Tooltip cursor={{ stroke: 'rgba(255,255,255,0.1)' }} content={<EvaluationTooltip />} />
+	                  <ReferenceLine y={0} stroke="#444" strokeDasharray="3 3" />
+	                  {selectedPositionIndex >= 0 && (
+	                    <ReferenceLine x={selectedPositionIndex} stroke="rgba(255,255,255,0.18)" />
+	                  )}
+	                  <Line
+	                    type="monotone"
+	                    dataKey="eval"
+	                    stroke="#38bdf8"
+	                    strokeWidth={2.5}
+	                    dot={false}
+	                    activeDot={{ r: 4, strokeWidth: 0, fill: '#f8fafc' }}
+	                    isAnimationActive={false}
+	                  />
+	                </LineChart>
+	              </ResponsiveContainer>
+	            </div>
+	          </div>
+	        )}
 
         {/* Analysis Progress Bar */}
         {analysisProgress && (
@@ -1617,31 +1764,37 @@ function App() {
           </div>
         )}
 
-        <div className="history-list">
-          {board.history.map((snapshot, idx) => {
-            const isActive = historyIndex === idx || (historyIndex === -1 && idx === board.history.length - 1);
-            const stats = engineStats[idx];
-            // Analysis of the position BEFORE this move was made
-            const analysis = idx > 0 ? gameAnalysis[idx - 1] : null;
-            return (
+	        <div className="history-list">
+	          {board.history.map((snapshot, idx) => {
+	            const isActive = historyIndex === idx || (historyIndex === -1 && idx === board.history.length - 1);
+	            const stats = engineStats[idx];
+	            // Analysis of the position BEFORE this move was made
+	            const analysis = idx > 0 ? gameAnalysis[idx - 1] : null;
+	            const chartPoint = evaluationChartData[idx] || null;
+	            return (
               <div
                 key={idx}
                 className={`history-item ${isActive ? 'active' : ''}`}
                 onClick={() => handleHistoryClick(idx)}
                 style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '4px' }}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
-                  <span>{idx === 0 ? "Start" : `${idx}. ${snapshot.move}`}</span>
-                  {stats && (
-                    <span className="engine-stats">d{stats.depth} · {(stats.timeMs / 1000).toFixed(1)}s</span>
-                  )}
-                </div>
-                {analysis && idx > 0 && (
-                  <div className="move-analysis" style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'flex', gap: '8px' }}>
-                    <span style={{ color: analysis.numericScore > 0 ? '#4ade80' : analysis.numericScore < 0 ? '#f87171' : '#9ca3af' }}>{analysis.score}</span>
-                    <span>Best: {analysis.bestMove || 'None'}</span>
-                  </div>
-                )}
+	                <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+	                  <span>{formatPlyLabel(snapshot, idx)}</span>
+	                  {stats && (
+	                    <span className="engine-stats">d{stats.depth} · {(stats.timeMs / 1000).toFixed(1)}s</span>
+	                  )}
+	                </div>
+	                {(analysis || chartPoint) && idx > 0 && (
+	                  <div className="move-analysis" style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'flex', gap: '8px' }}>
+	                    {chartPoint && (
+	                      <>
+	                        <span style={{ color: chartPoint.eval > 0 ? '#4ade80' : chartPoint.eval < 0 ? '#f87171' : '#9ca3af' }}>{chartPoint.evalText}</span>
+	                        <span>{chartPoint.swingText}</span>
+	                      </>
+	                    )}
+	                    {analysis?.bestMove && <span>Best: {analysis.bestMove}</span>}
+	                  </div>
+	                )}
               </div>
             );
           })}
@@ -1650,12 +1803,12 @@ function App() {
         {showAnalysisActions && (
           <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {showInlineAnalyzeButton && (
-              <button className="btn-ghost" onClick={handleAnalyze} disabled={isAnalyzing} style={{ fontSize: '13px', padding: '8px' }}>
-                {isAnalyzing ? 'Analyzing Position…' : '🔍 Refresh Top 3 Here'}
-              </button>
-            )}
-            <button className="btn-blue"
-              onClick={() => {
+	              <button type="button" className="btn-ghost" onClick={handleAnalyze} disabled={isAnalyzing} style={{ fontSize: '13px', padding: '8px' }}>
+	                {isAnalyzing ? 'Analyzing Position…' : '🔍 Refresh Top 3 Here'}
+	              </button>
+	            )}
+	            <button type="button" className="btn-blue"
+	              onClick={() => {
                 if (isLiveMultiplayer) {
                   window.open('/?spectate=' + roomCode, '_blank');
                 } else {
@@ -1683,14 +1836,14 @@ function App() {
                 <strong>{currentBestMove}</strong>
               </div>
             )}
-            {displayedAnalysisLines.length > 0 ? displayedAnalysisLines.map((line, i) => (
-              <div key={i} className="analysis-line">
-                <span className="analysis-rank">#{i + 1}</span>
-                <span className="analysis-score">{line.score}</span>
-                <span className="analysis-moves">{line.moves.join(' ')}</span>
-                <span className="analysis-depth">d{line.depth}</span>
-              </div>
-            )) : (
+	            {displayedAnalysisLines.length > 0 ? displayedAnalysisLines.map((line, i) => (
+	              <div key={i} className="analysis-line">
+	                <span className="analysis-rank">#{i + 1}</span>
+	                <span className="analysis-score">{line.score}</span>
+	                <span className="analysis-moves">{Array.isArray(line.moves) ? line.moves.join(' ') : (line.bestMove || 'No principal variation')}</span>
+	                <span className="analysis-depth">d{line.depth}</span>
+	              </div>
+	            )) : (
               <div className="analysis-empty">
                 {isAnalyzing ? 'Calculating top moves for this position…' : 'No legal moves available from this position.'}
               </div>
@@ -1722,9 +1875,9 @@ const IdentityModal = ({ tempProfile, setTempProfile, saveProfile, profileError 
             autoFocus
           />
         </div>
-        <button className="btn-cyber" style={{ marginTop: '10px' }} onClick={saveProfile}>
-          Authorize Access
-        </button>
+	        <button type="button" className="btn-cyber" style={{ marginTop: '10px' }} onClick={saveProfile}>
+	          Authorize Access
+	        </button>
         {profileError && <div className="cyber-status">{profileError}</div>}
       </div>
     </div>

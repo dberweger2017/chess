@@ -268,7 +268,13 @@ io.on('connection', (socket) => {
         const liveGames = [];
         rooms.forEach((roomData, code) => {
             if (roomData.full && !roomData.finished) {
-                liveGames.push({ code, moves: roomData.history.length });
+                const whiteHandle = getProfileName(roomData.profiles?.white, 'White');
+                const blackHandle = getProfileName(roomData.profiles?.black, roomData.isCPU ? 'Stockfish' : 'Black');
+                liveGames.push({
+                    code,
+                    moves: roomData.history.length,
+                    players: `${whiteHandle} vs ${blackHandle}`
+                });
             }
         });
         socket.emit('live_games_list', liveGames);
