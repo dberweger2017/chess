@@ -10,16 +10,66 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
     cors: {
-        origin: "*", // Allow Vite local dev
+        origin: "*",
         methods: ["GET", "POST"]
     }
 });
 
-// Store active rooms
 const rooms = new Map();
-
-// Matchmaking waiting queue (stores socket.id)
 let waitingPlayer = null;
+
+function getProfileName(profile, fallback) {
+    const name = profile?.name?.trim();
+    return name || fallback;
+}
+
+function getSocketColor(room, socketId) {
+    return room?.players?.[socketId] || null;
+}
+
+function getOpponentSocketId(room, socketId) {
+    return Object.keys(room?.players || {}).find((id) => id !== socketId && id !== 'cpu') || null;
+}
+
+function inferResultFromHistory(history) {
+    const lastSnapshot = history?.[history.length - 1];
+    const lastStatus = lastSnapshot?.gameStatus;
+
+    if (lastStatus === 'checkmate') {
+        const winnerColor = lastSnapshot?.turn === 'white' ? 'black' : 'white';
+        return {
+            result: winnerColor === 'white' ? 'white_win' : 'black_win',
+            winnerColor,
+            termination: 'checkmate'
+        };
+    }
+
+    if (lastStatus === 'stalemate' || lastStatus === 'draw') {
+        return {
+            result: 'draw',
+            winnerColor: null,
+            termination: lastStatus === 'draw' ? 'draw_agreement' : 'stalemate'
+        };
+    }
+
+    return {
+        result: null,
+        winnerColor: null,
+        termination: null
+    };
+}
+
+function buildGameMetadata(room, roomCode, history, overrides = {}) {
+    const inferred = inferResultFromHistory(history);
+    return {
+        gameName: overrides.gameName || (roomCode === 'CPU' ? 'CPU Match' : `Game ${roomCode}`),
+        whiteName: overrides.whiteName || getProfileName(room?.profiles?.white, 'White'),
+        blackName: overrides.blackName || getProfileName(room?.profiles?.black, room?.isCPU ? 'Stockfish' : 'Black'),
+        result: overrides.result ?? inferred.result,
+        winnerColor: overrides.winnerColor ?? inferred.winnerColor,
+        termination: overrides.termination ?? inferred.termination
+    };
+}
 
 function broadcastWaitingCount() {
     io.emit('waiting_count', waitingPlayer ? 1 : 0);
@@ -28,9 +78,9 @@ function broadcastWaitingCount() {
 function broadcastLiveGames() {
     const liveGames = [];
     rooms.forEach((roomData, code) => {
-        if (roomData.full) {
-            const whiteHandle = roomData.profiles?.white?.name || 'White';
-            const blackHandle = roomData.profiles?.black?.name || 'Black';
+        if (roomData.full && !roomData.finished) {
+            const whiteHandle = getProfileName(roomData.profiles?.white, 'White');
+            const blackHandle = getProfileName(roomData.profiles?.black, roomData.isCPU ? 'Stockfish' : 'Black');
             liveGames.push({
                 code,
                 moves: roomData.history?.length || 0,
@@ -41,7 +91,6 @@ function broadcastLiveGames() {
     io.emit('live_games_list', liveGames);
 }
 
-// Optional periodic refresh
 setInterval(broadcastLiveGames, 5000);
 
 function generateRoomCode() {
@@ -53,6 +102,33 @@ function generateRoomCode() {
     return code;
 }
 
+function createRoomState(base) {
+    return {
+        history: [],
+        full: false,
+        finished: false,
+        saved: false,
+        drawOffer: null,
+        ...base
+    };
+}
+
+function saveFinishedRoomGame(code, room, history, overrides = {}) {
+    if (!room || room.saved) return;
+
+    room.saved = true;
+    room.finished = true;
+    room.drawOffer = null;
+
+    const metadata = buildGameMetadata(room, code, history, overrides);
+    saveGame(code, history, metadata, (id) => {
+        if (id) {
+            io.to(code).emit('game_saved', id);
+        }
+        broadcastLiveGames();
+    });
+}
+
 io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
 
@@ -62,13 +138,10 @@ io.on('connection', (socket) => {
             code = generateRoomCode();
         }
 
-        // Store room with the creator as white
-        rooms.set(code, {
+        rooms.set(code, createRoomState({
             players: { [socket.id]: 'white' },
-            profiles: { white: data?.profile || { name: 'White' } },
-            full: false,
-            history: []
-        });
+            profiles: { white: data?.profile || { name: 'White' } }
+        }));
 
         socket.join(code);
         socket.emit('game_created', { code, color: 'white' });
@@ -81,16 +154,15 @@ io.on('connection', (socket) => {
             code = generateRoomCode();
         }
 
-        rooms.set(code, {
+        rooms.set(code, createRoomState({
             players: { [socket.id]: 'white', 'cpu': 'black' },
             profiles: {
                 white: data?.profile || { name: 'White' },
                 black: { name: 'Stockfish' }
             },
-            full: true, // Show in live games immediately
-            history: [],
+            full: true,
             isCPU: true
-        });
+        }));
 
         socket.join(code);
         socket.emit('cpu_game_created', code);
@@ -112,7 +184,6 @@ io.on('connection', (socket) => {
             return;
         }
 
-        // Assign black to the second player
         room.players[socket.id] = 'black';
         if (!room.profiles) room.profiles = {};
         room.profiles.black = (data && data.profile) || { name: 'Black' };
@@ -124,55 +195,50 @@ io.on('connection', (socket) => {
         broadcastLiveGames();
         console.log(`User ${socket.id} joined room ${code} (black)`);
 
-        // Notify the room that game can start
         io.to(code).emit('game_start', { message: 'Opponent joined. White to move.' });
     });
 
     socket.on('find_game', (data) => {
-        // If there is no one waiting, or if the current socket is the one waiting (prevent double-click bug)
         if (!waitingPlayer || waitingPlayer.id === socket.id) {
             let code = generateRoomCode();
             while (rooms.has(code)) {
                 code = generateRoomCode();
             }
 
-            rooms.set(code, {
+            rooms.set(code, createRoomState({
                 players: { [socket.id]: 'white' },
-                profiles: { white: data?.profile || { name: 'White' } },
-                full: false,
-                history: [] // Start tracking move history for the DB
-            });
+                profiles: { white: data?.profile || { name: 'White' } }
+            }));
 
-            waitingPlayer = { id: socket.id, code: code };
+            waitingPlayer = { id: socket.id, code };
             broadcastWaitingCount();
             socket.join(code);
             socket.emit('game_created', { code, color: 'white' });
-            socket.emit('waiting_for_match'); // Custom event for the new UI state
+            socket.emit('waiting_for_match');
             console.log(`User ${socket.id} is waiting for a match (Room ${code})`);
-        } else {
-            // Someone is waiting! Join their room
-            const code = waitingPlayer.code;
-            const room = rooms.get(code);
-
-            if (room) {
-                room.players[socket.id] = 'black';
-                if (!room.profiles) room.profiles = {};
-                room.profiles.black = data?.profile || { name: 'Black' };
-                room.full = true;
-                rooms.set(code, room);
-
-                socket.join(code);
-                socket.emit('game_joined', { code, color: 'black' });
-                console.log(`User ${socket.id} joined waiting player in room ${code} (black)`);
-
-                // Notify both players the match found!
-                io.to(code).emit('game_start', { message: 'Match found! White to move.' });
-                broadcastLiveGames();
-            }
-            // Reset waiting queue
-            waitingPlayer = null;
-            broadcastWaitingCount();
+            return;
         }
+
+        const code = waitingPlayer.code;
+        const room = rooms.get(code);
+
+        if (room) {
+            room.players[socket.id] = 'black';
+            if (!room.profiles) room.profiles = {};
+            room.profiles.black = data?.profile || { name: 'Black' };
+            room.full = true;
+            rooms.set(code, room);
+
+            socket.join(code);
+            socket.emit('game_joined', { code, color: 'black' });
+            console.log(`User ${socket.id} joined waiting player in room ${code} (black)`);
+
+            io.to(code).emit('game_start', { message: 'Match found! White to move.' });
+            broadcastLiveGames();
+        }
+
+        waitingPlayer = null;
+        broadcastWaitingCount();
     });
 
     socket.on('cancel_find_game', () => {
@@ -186,21 +252,22 @@ io.on('connection', (socket) => {
     });
 
     socket.on('make_move', ({ code, startPos, endPos, newHistoryItem }) => {
-        // Broadcast the move to the OTHER player in the room (and spectators)
+        const room = rooms.get(code);
+        if (!room || room.finished) return;
+
         socket.to(code).emit('opponent_move', { startPos, endPos });
 
-        // Save to server room state
-        const room = rooms.get(code);
-        if (room && newHistoryItem) {
+        if (newHistoryItem) {
             room.history.push(newHistoryItem);
-            broadcastLiveGames(); // Update move count in lobby
+            room.drawOffer = null;
+            broadcastLiveGames();
         }
     });
 
     socket.on('get_live_games', () => {
         const liveGames = [];
         rooms.forEach((roomData, code) => {
-            if (roomData.full) {
+            if (roomData.full && !roomData.finished) {
                 liveGames.push({ code, moves: roomData.history.length });
             }
         });
@@ -215,29 +282,91 @@ io.on('connection', (socket) => {
         const room = rooms.get(code);
         if (room) {
             socket.join(code);
-            // Send the current history to the spectator so they can build the board
             socket.emit('spectator_joined', { code, history: room.history });
         } else {
             socket.emit('join_error', 'Game no longer exists.');
         }
     });
 
-    socket.on('save_cpu_game', ({ history }) => {
-        saveGame('CPU', history, (id) => {
+    socket.on('save_cpu_game', ({ code, history }) => {
+        const room = rooms.get(code);
+        const metadata = buildGameMetadata(room, 'CPU', history);
+        saveGame('CPU', history, metadata, (id) => {
+            if (room) {
+                room.saved = true;
+                room.finished = true;
+            }
             if (id) socket.emit('game_saved', id);
+            broadcastLiveGames();
         });
     });
 
-    socket.on('save_multiplayer_game', ({ code, history }) => {
+    socket.on('save_multiplayer_game', ({ code, history, result }) => {
         const room = rooms.get(code);
         if (room && !room.saved) {
-            room.saved = true; // Prevent double save
-            saveGame(code, history, (id) => {
-                if (id) {
-                    io.to(code).emit('game_saved', id);
-                }
-            });
+            saveFinishedRoomGame(code, room, history, result || {});
         }
+    });
+
+    socket.on('resign_game', ({ code }) => {
+        const room = rooms.get(code);
+        const resigningColor = getSocketColor(room, socket.id);
+        if (!room || room.finished || !resigningColor) return;
+
+        const winnerColor = resigningColor === 'white' ? 'black' : 'white';
+        io.to(code).emit('game_ended', {
+            result: winnerColor === 'white' ? 'white_win' : 'black_win',
+            winnerColor,
+            termination: 'resignation',
+            message: `${winnerColor === 'white' ? 'White' : 'Black'} wins by surrender.`
+        });
+
+        saveFinishedRoomGame(code, room, room.history, {
+            result: winnerColor === 'white' ? 'white_win' : 'black_win',
+            winnerColor,
+            termination: 'resignation'
+        });
+    });
+
+    socket.on('offer_draw', ({ code }) => {
+        const room = rooms.get(code);
+        const color = getSocketColor(room, socket.id);
+        if (!room || room.finished || !color || room.drawOffer) return;
+
+        const opponentSocketId = getOpponentSocketId(room, socket.id);
+        if (!opponentSocketId) return;
+
+        room.drawOffer = { fromSocketId: socket.id, color };
+        io.to(socket.id).emit('draw_offer_sent');
+        io.to(opponentSocketId).emit('draw_offer_received', {
+            fromColor: color,
+            fromName: getProfileName(room.profiles?.[color], color === 'white' ? 'White' : 'Black')
+        });
+    });
+
+    socket.on('respond_draw_offer', ({ code, accepted }) => {
+        const room = rooms.get(code);
+        if (!room || room.finished || !room.drawOffer) return;
+
+        const offeringSocketId = room.drawOffer.fromSocketId;
+        room.drawOffer = null;
+
+        if (accepted) {
+            io.to(code).emit('game_ended', {
+                result: 'draw',
+                winnerColor: null,
+                termination: 'draw_agreement',
+                message: 'Tablas agreed.'
+            });
+            saveFinishedRoomGame(code, room, room.history, {
+                result: 'draw',
+                winnerColor: null,
+                termination: 'draw_agreement'
+            });
+            return;
+        }
+
+        io.to(offeringSocketId).emit('draw_offer_declined');
     });
 
     socket.on('save_game_analysis', ({ id, analysis }) => {
@@ -253,27 +382,32 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => {
         console.log('User disconnected:', socket.id);
 
-        // Remove from waiting queue if they disconnect
         if (waitingPlayer && waitingPlayer.id === socket.id) {
             rooms.delete(waitingPlayer.code);
             waitingPlayer = null;
             broadcastWaitingCount();
         }
 
-        // Notify rooms the user was in and close them down
         rooms.forEach((roomData, code) => {
-            if (roomData.players[socket.id]) {
-                io.to(code).emit('opponent_disconnected');
+            if (!roomData.players[socket.id]) return;
 
-                // Save to DB before destroying if not already saved
-                if (!roomData.saved && roomData.history.length > 2) {
-                    roomData.saved = true;
-                    saveGame(code, roomData.history);
-                }
+            io.to(code).emit('opponent_disconnected');
 
-                rooms.delete(code);
-                broadcastLiveGames();
+            if (!roomData.saved && roomData.history.length > 2) {
+                const disconnectColor = roomData.players[socket.id];
+                const winnerColor = roomData.full && disconnectColor
+                    ? (disconnectColor === 'white' ? 'black' : 'white')
+                    : null;
+
+                saveFinishedRoomGame(code, roomData, roomData.history, {
+                    result: winnerColor ? (winnerColor === 'white' ? 'white_win' : 'black_win') : 'abandoned',
+                    winnerColor,
+                    termination: 'disconnect'
+                });
             }
+
+            rooms.delete(code);
+            broadcastLiveGames();
         });
     });
 });

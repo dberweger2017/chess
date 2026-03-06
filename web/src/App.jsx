@@ -27,7 +27,7 @@ const PIECE_IMAGES = {
 const FILES = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
 const REVIEW_ANALYSIS_DEPTH = 10;
 const LIVE_ANALYSIS_DEPTH = 24;
-const ANALYSIS_LINE_COUNT = 5;
+const ANALYSIS_LINE_COUNT = 3;
 const ANALYSIS_SCHEMA_VERSION = 2;
 
 // Connect to the Node server (using default host for reverse proxy support)
@@ -100,6 +100,72 @@ function normalizeStoredAnalysis(rawAnalysis, expectedLength, minimumDepth) {
   } catch {
     return null;
   }
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function formatGameOutcome(game) {
+  if (game.result === 'draw') return '🤝 Tablas';
+  if (game.termination === 'resignation') return 'Resignation';
+  if (game.termination === 'checkmate') return 'Checkmate';
+  if (game.termination === 'disconnect') return 'Disconnect';
+  if (game.termination === 'stalemate') return 'Stalemate';
+  return 'Finished';
+}
+
+function crownName(name, winnerColor, color) {
+  const label = name || (color === 'white' ? 'White' : 'Black');
+  return winnerColor === color ? `👑 ${label}` : label;
+}
+
+function buildPrecisionStats(history, analysis) {
+  const totals = {
+    white: { loss: 0, moves: 0 },
+    black: { loss: 0, moves: 0 }
+  };
+
+  for (let idx = 1; idx < history.length; idx += 1) {
+    const before = analysis[idx - 1];
+    const after = analysis[idx];
+    if (!before || !after) continue;
+
+    const mover = idx % 2 === 1 ? 'white' : 'black';
+    const expected = before.numericScore ?? 0;
+    const actual = -(after.numericScore ?? 0);
+    const loss = Math.max(0, expected - actual);
+
+    totals[mover].loss += loss;
+    totals[mover].moves += 1;
+  }
+
+  const makeStat = (color) => {
+    const moveCount = totals[color].moves;
+    const averageLoss = moveCount > 0 ? totals[color].loss / moveCount : 0;
+    const precision = clamp(100 - averageLoss * 12, 0, 100);
+
+    return {
+      color,
+      moves: moveCount,
+      averageLoss,
+      precision
+    };
+  };
+
+  return {
+    white: makeStat('white'),
+    black: makeStat('black')
+  };
+}
+
+function AppLogo({ onClick }) {
+  return (
+    <button type="button" className="app-logo" onClick={onClick}>
+      <span className="app-logo-mark">♟</span>
+      <span className="app-logo-text">Cyber Chess</span>
+    </button>
+  );
 }
 
 function AnalysisArrows({ analysisLines, playerColor }) {
@@ -218,6 +284,9 @@ function App() {
   const [pendingAnalysisId, setPendingAnalysisId] = useState(null);
   const [savedGameId, setSavedGameId] = useState(null);
   const [waitingCount, setWaitingCount] = useState(0);
+  const [gameEndState, setGameEndState] = useState(null);
+  const [drawOfferState, setDrawOfferState] = useState('idle');
+  const [reviewGameMeta, setReviewGameMeta] = useState(null);
 
   // User Profile
   const [userProfile, setUserProfile] = useState(() => {
@@ -248,6 +317,12 @@ function App() {
     setIsAnalyzing(false);
     setAnalysisProgress(null);
     setAnalysisLoadingState(null);
+    setReviewGameMeta(null);
+  };
+
+  const resetMultiplayerState = () => {
+    setGameEndState(null);
+    setDrawOfferState('idle');
   };
 
   const getViewedPositionIndex = () => {
