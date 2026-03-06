@@ -291,6 +291,12 @@ function App() {
     startPendingAutoAnalysis();
   };
 
+  function saveCpuGame(nextBoard) {
+    if (nextBoard && nextBoard.history && nextBoard.history.length > 1) {
+      socket.emit('save_cpu_game', { history: nextBoard.history });
+    }
+  }
+
   function initStockfish(code) {
     // Initialize Stockfish with a specific room code
     if (stockfishRef.current) stockfishRef.current.destroy();
@@ -631,13 +637,6 @@ function App() {
   const handleCancelFindGame = () => {
     socket.emit('cancel_find_game');
     setView('LOBBY');
-  };
-
-  // Helper to save CPU game to DB
-  const saveCpuGame = (b) => {
-    if (b && b.history && b.history.length > 1) {
-      socket.emit('save_cpu_game', { history: b.history });
-    }
   };
 
   const handlePlayCPU = () => {
