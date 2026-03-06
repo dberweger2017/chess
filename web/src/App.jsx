@@ -459,6 +459,7 @@ function App() {
           }
 
           if (newIdx !== prev) {
+            positionAnalyzerRef.current?.stopAnalysis();
             setSelectedPos(null);
             setLegalMoves([]);
             setIsAnalyzing(false);
@@ -478,6 +479,7 @@ function App() {
           }
 
           if (newIdx !== prev) {
+            positionAnalyzerRef.current?.stopAnalysis();
             setSelectedPos(null);
             setLegalMoves([]);
             setIsAnalyzing(false);
@@ -566,7 +568,7 @@ function App() {
     if (view === 'SPECTATING' && board.history.length > 0) {
       queueAutoAnalysis(board, { targetDepth: LIVE_ANALYSIS_DEPTH });
     }
-  }, [board.history.length, view]);
+  }, [board, view]);
 
   const handleCancelFindGame = () => {
     socket.emit('cancel_find_game');
@@ -1275,6 +1277,7 @@ function App() {
     }
     setSelectedPos(null);
     setLegalMoves([]);
+    positionAnalyzerRef.current?.stopAnalysis();
     positionAnalysisTokenRef.current += 1;
     setIsAnalyzing(false);
   };
