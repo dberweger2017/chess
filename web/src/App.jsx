@@ -624,9 +624,9 @@ function App() {
       setDrawOfferState('sent');
     });
 
-    socket.on('draw_offer_received', ({ fromName }) => {
+    socket.on('draw_offer_received', ({ code, fromName }) => {
       const accepted = window.confirm(`${fromName} offered tablas. Do you agree?`);
-      socket.emit('respond_draw_offer', { code: roomCode, accepted });
+      socket.emit('respond_draw_offer', { code, accepted });
     });
 
     socket.on('draw_offer_declined', () => {
