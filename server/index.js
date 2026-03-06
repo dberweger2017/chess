@@ -2,7 +2,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
-const { saveGame, getPastGames } = require('./db');
+const { saveGame, saveAnalysis, getPastGames } = require('./db');
 
 const app = express();
 app.use(cors());
@@ -160,7 +160,13 @@ io.on('connection', (socket) => {
     });
 
     socket.on('save_cpu_game', ({ history }) => {
-        saveGame('CPU', history);
+        saveGame('CPU', history, (id) => {
+            if (id) socket.emit('game_saved', id);
+        });
+    });
+
+    socket.on('save_game_analysis', ({ id, analysis }) => {
+        saveAnalysis(id, analysis);
     });
 
     socket.on('get_past_games', () => {
