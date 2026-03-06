@@ -487,30 +487,7 @@ function App() {
     setUserProfile(profile);
   };
 
-  const IdentityModal = () => (
-    <div className="identity-overlay">
-      <div className="identity-modal">
-        <h2>Identity Setup</h2>
-        <p>Your handle is required to access the neural chess network.</p>
-        <div className="identity-form">
-          <div className="input-block">
-            <label>Shadow Handle</label>
-            <input
-              type="text"
-              className="cyber-input"
-              placeholder="e.g. ZeroCool"
-              value={tempProfile.name}
-              onChange={e => setTempProfile({ name: e.target.value })}
-            />
-          </div>
-          <button className="btn-cyber" style={{ marginTop: '10px' }} onClick={saveProfile}>
-            Authorize Access
-          </button>
-          {profileError && <div className="cyber-status">{profileError}</div>}
-        </div>
-      </div>
-    </div>
-  );
+
 
   const handleSquareClick = (pos) => {
     // If we just finished dragging, don't trigger a click on the same frame.
