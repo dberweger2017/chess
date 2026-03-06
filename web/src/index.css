@@ -110,6 +110,7 @@ h1 {
   margin: 0;
   background: linear-gradient(135deg, #ffffff 0%, #d4d4e8 100%);
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 
@@ -535,6 +536,7 @@ input[type="range"],
   letter-spacing: 14px;
   background: linear-gradient(135deg, var(--orange), #fbbf24);
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
   margin: 20px 0;
   filter: drop-shadow(0 4px 12px var(--orange-glow));
