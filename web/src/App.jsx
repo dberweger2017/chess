@@ -182,12 +182,11 @@ function App() {
     // Generate FEN array for the whole game
     const fens = [];
     const tmpBoard = new Board();
-    fens.push(tmpBoard.toFEN()); // Start pos
 
     for (let i = 0; i < finalBoard.history.length; i++) {
       const snap = finalBoard.history[i];
       tmpBoard.pieces = snap.pieces;
-      tmpBoard.turn = (i % 2 === 0) ? 'black' : 'white';
+      tmpBoard.turn = (i % 2 === 0) ? 'white' : 'black';
       tmpBoard.enPassantSquare = snap.enPassantSquare;
       tmpBoard.halfMoveClock = snap.halfMoveClock;
       fens.push(tmpBoard.toFEN());
