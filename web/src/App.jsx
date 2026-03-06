@@ -34,6 +34,7 @@ function App() {
   const [selectedPos, setSelectedPos] = useState(null);
   const [legalMoves, setLegalMoves] = useState([]);
   const [preMove, setPreMove] = useState(null); // { startPos, endPos }
+  const [draggedPos, setDraggedPos] = useState(null); // The square currently being dragged from
   const [historyIndex, setHistoryIndex] = useState(-1);
   const stockfishRef = useRef(null);
   const [cpuThinking, setCpuThinking] = useState(false);
@@ -363,6 +364,8 @@ function App() {
   };
 
   const handleSquareClick = (pos) => {
+    // If we just finished dragging, don't trigger a click on the same frame.
+    // The drag handlers manage movement. We keep click logic for click-to-move.
     const isVsCPU = view === 'VS_CPU';
     if (view !== 'GAME' && !isVsCPU) return;
     if (historyIndex !== -1) return;
@@ -463,6 +466,65 @@ function App() {
     }
   };
 
+  // ──────── DRAG AND DROP HANDLERS ────────
+
+  const onDragStart = (e, pos) => {
+    // Only allow drag if it's our color and game is active
+    const activePieces = historyIndex === -1 ? board.pieces : board.history[historyIndex].pieces;
+    const piece = activePieces[pos];
+
+    if (!piece || piece.color !== playerColor) {
+      e.preventDefault();
+      return;
+    }
+
+    // We can drag on our turn (normal move) or opponent turn (pre-move)
+    if (view !== 'GAME' && view !== 'VS_CPU') {
+      e.preventDefault();
+      return;
+    }
+
+    if (historyIndex !== -1 || board.gameStatus !== 'active' || (board.turn !== playerColor && cpuThinking)) {
+      e.preventDefault();
+      return;
+    }
+
+    // Pre-select the piece so legal moves show up instantly during drag
+    setSelectedPos(pos);
+    setLegalMoves(board.getLegalMovesForPiece(pos));
+    setDraggedPos(pos);
+
+    // Custom drag image (hide default to make it look cleaner, or leave it)
+    e.dataTransfer.effectAllowed = 'move';
+    // Firefox requires some data to be set
+    e.dataTransfer.setData('text/plain', pos);
+  };
+
+  const onDragOver = (e, pos) => {
+    e.preventDefault(); // Necessary to allow dropping
+    e.dataTransfer.dropEffect = 'move';
+  };
+
+  const onDrop = (e, pos) => {
+    e.preventDefault();
+    if (!draggedPos) return;
+
+    // Simulate a click on the destination square to leverage existing move/pre-move logic
+    // We temporarily select the dragged pos just in case, then trigger click
+    if (legalMoves.includes(pos)) {
+      handleSquareClick(pos);
+    } else {
+      // Invalid drop, clear selection
+      setSelectedPos(null);
+      setLegalMoves([]);
+    }
+    setDraggedPos(null);
+  };
+
+  const onDragEnd = () => {
+    setDraggedPos(null);
+  };
+
   const renderSquare = (c, r) => {
     const displayR = playerColor === 'black' ? r : 7 - r;
     const displayC = playerColor === 'black' ? 7 - c : c;
@@ -481,8 +543,10 @@ function App() {
     return (
       <div
         key={pos}
-        className={`square ${isLight ? 'light' : 'dark'} ${isSelected ? 'selected' : ''} ${isCapture ? 'legal-capture' : ''}`}
+        className={`square ${isLight ? 'light' : 'dark'} ${isSelected ? 'selected' : ''} ${isCapture ? 'legal-capture' : ''} ${draggedPos === pos ? 'dragging' : ''}`}
         onClick={() => handleSquareClick(pos)}
+        onDragOver={(e) => onDragOver(e, pos)}
+        onDrop={(e) => onDrop(e, pos)}
       >
         {showRank && <span className="coord-label rank">{displayR + 1}</span>}
         {showFile && <span className="coord-label file">{FILES[displayC]}</span>}
@@ -492,7 +556,9 @@ function App() {
             src={PIECE_IMAGES[piece.color][piece.type]}
             alt={`${piece.color} ${piece.type}`}
             className="piece"
-            draggable="false"
+            draggable={piece.color === playerColor && historyIndex === -1 && board.gameStatus === 'active'}
+            onDragStart={(e) => onDragStart(e, pos)}
+            onDragEnd={onDragEnd}
           />
         )}
       </div>
